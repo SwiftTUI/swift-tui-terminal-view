@@ -5,7 +5,7 @@
   import SwiftTUIRuntime
   import Testing
 
-  @testable import SwiftTUITerminal
+  @testable import SwiftTUITerminalView
 
   @MainActor
   @Suite("TerminalView modifiers")

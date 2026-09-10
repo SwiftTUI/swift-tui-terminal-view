@@ -6,7 +6,7 @@
   import SwiftTUIRuntime
   import Testing
 
-  @testable import SwiftTUITerminal
+  @testable import SwiftTUITerminalView
 
   @Suite("TerminalProcessSession lifecycle", .serialized)
   struct SessionLifecycleTests {

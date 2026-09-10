@@ -7,7 +7,7 @@
   import Synchronization
   import Testing
 
-  @testable import SwiftTUITerminal
+  @testable import SwiftTUITerminalView
 
   @MainActor
   @Suite("TerminalView layout", .timeLimit(.minutes(1)))

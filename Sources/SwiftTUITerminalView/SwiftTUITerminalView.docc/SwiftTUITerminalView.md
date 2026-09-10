@@ -1,10 +1,10 @@
-# ``SwiftTUITerminal``
+# ``SwiftTUITerminalView``
 
 Embed external terminal programs inside SwiftTUI views.
 
 ## Overview
 
-`SwiftTUITerminal` provides `TerminalView` plus session and emulator types for
+`SwiftTUITerminalView` provides `TerminalView` plus session and emulator types for
 hosting child terminal programs inside a SwiftTUI app. Use it when your app
 needs an interactive shell, command preview, log tail, or other terminal
 program pane.
@@ -75,7 +75,8 @@ focused-key handlers.
 
 - ``TerminalSession``
 - ``TerminalProcessSession``
-- ``ChildProcessPty``
+- <doc:Getting-Started>
+- <doc:TerminalEmbedding>
 - ``TerminalLifecycle``
 - ``TerminalExitReason``
 

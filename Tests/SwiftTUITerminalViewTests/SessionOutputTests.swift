@@ -3,7 +3,7 @@
   import SwiftTUIRuntime
   import Testing
 
-  @testable import SwiftTUITerminal
+  @testable import SwiftTUITerminalView
 
   @Suite("Terminal process output", .serialized)
   struct SessionOutputTests {
