@@ -6,6 +6,7 @@ name: Test
 # pass. This runs the same command as the org root's
 # //:swift_tui_terminal_view_native_gate (swiftly-managed `swift test` + API check),
 # so a red here means the org gate would be red too.
+# There is no WASI lane: SwiftTerm and PTY process hosting are unsupported there.
 #
 # Lane shape:
 #   * push / pull_request  — Linux tests and API baseline; pushes also run
