@@ -26,7 +26,7 @@ run_swift() {
   fi
 }
 
-find .build \( -name 'SwiftTUITerminalView.symbols.json' -o -name 'SwiftTUITerminalEmulation.symbols.json' \) -delete 2>/dev/null || true
+find .build \( -name 'SwiftTUITerminalView.symbols.json' -o -name 'SwiftTUITerminalView@*.symbols.json' -o -name 'SwiftTUITerminalEmulation.symbols.json' -o -name 'SwiftTUITerminalEmulation@*.symbols.json' \) -delete 2>/dev/null || true
 run_swift package dump-symbol-graph --minimum-access-level public --skip-synthesized-members >&2
 
 SYMBOLS="$(python3 - <<'PYTHON'
@@ -38,10 +38,13 @@ for module in ("SwiftTUITerminalView", "SwiftTUITerminalEmulation"):
     paths = list(Path(".build").rglob(module + ".symbols.json"))
     if len(paths) != 1:
         raise SystemExit(f"expected one {module} symbol graph, found {len(paths)}")
-    graph = json.loads(paths[0].read_text())
-    for symbol in graph.get("symbols", []):
-        if symbol.get("accessLevel") == "public" and symbol.get("pathComponents"):
-            lines.add(module + "." + ".".join(symbol["pathComponents"]))
+    # Extensions of framework protocols are emitted in @-qualified graphs.
+    # They are owned here too (notably View.terminalTitleChanged).
+    for path in paths + list(paths[0].parent.glob(module + "@*.symbols.json")):
+        graph = json.loads(path.read_text())
+        for symbol in graph.get("symbols", []):
+            if symbol.get("accessLevel") == "public" and symbol.get("pathComponents"):
+                lines.add(module + "." + ".".join(symbol["pathComponents"]))
 print("\n".join(sorted(lines)))
 PYTHON
 )"

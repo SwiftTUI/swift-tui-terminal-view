@@ -2,7 +2,7 @@
 
 set -eu
 
-repo_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 output_path=".build-docs"
 hosting_base_path="docs/terminal-view"
 
@@ -51,6 +51,7 @@ swift package \
   generate-documentation \
   --target SwiftTUITerminalView \
   --target SwiftTUITerminalEmulation \
+  --enable-experimental-combined-documentation \
   --transform-for-static-hosting \
   --hosting-base-path "$hosting_base_path" \
   --output-path "$output_path"

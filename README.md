@@ -1,6 +1,6 @@
 # SwiftTUI Terminal View
 
-[![SwiftTUI](https://img.shields.io/badge/SwiftTUI-0.12.1-blue)](https://github.com/SwiftTUI/swift-tui)
+[![SwiftTUI](https://img.shields.io/badge/status-0.12.1%20pre--release-DAA520)](https://github.com/SwiftTUI/swift-tui)
 
 Embed terminal programs inside SwiftTUI views. `SwiftTUITerminalView` provides
 `TerminalView`, `TerminalProcessSession`, the `TerminalSession` protocol, and

@@ -1,6 +1,4 @@
-// This whole module is compiled out on Windows: the dependency edges to
-// SwiftTerm and the PTY layer are platform-conditional in Package.swift, so
-// the target must compile to an empty module there.
+// Terminal program embedding requires POSIX; Windows is unsupported.
 #if !os(Windows)
   public import SwiftTUIRuntime
 

@@ -5,8 +5,8 @@ Host external terminal programs inside SwiftTUI layout with the
 
 ## Overview
 
-Terminal embedding is implemented outside the `SwiftTUIRuntime` product in the
-root package's `SwiftTUITerminalView` product. Apps import `SwiftTUI` for the
+Terminal embedding is implemented in the separate `swift-tui-terminal-view`
+package's `SwiftTUITerminalView` product. Apps import `SwiftTUI` for the
 convenience surface or `SwiftTUIRuntime` for explicit composition, and
 import `SwiftTUITerminalView` for `TerminalView<Session>`, `TerminalSession`, and
 `TerminalProcessSession`.
@@ -16,8 +16,8 @@ from its parent proposal and draws a foreign terminal grid through the existing
 raster path. While focused, it forwards keyboard input to the child session.
 The child program does not own a separate commit path.
 
-For the product boundary context, see <doc:Architecture> and
-<doc:Host-Integration>.
+For the product boundary context, see [Architecture](https://swifttui.sh/docs/documentation/swifttuiruntime/architecture) and
+[Host Integration](https://swifttui.sh/docs/documentation/swifttuiruntime/host-integration).
 
 ## Authoring
 
@@ -144,5 +144,5 @@ filesystem navigation and an embedded preview command in the rightmost column.
 Sixel and Kitty graphics inside an embedded pane, Kitty keyboard protocol, OSC
 99 notification namespacing, iOS, and WASI are not yet implemented.
 
-For the broader runtime model and deferred surface rationale, see <doc:Runtime>
-and <doc:Vision>.
+For the broader runtime model and deferred surface rationale, see [Runtime](https://swifttui.sh/docs/documentation/swifttuiruntime/runtime)
+and [Vision](https://swifttui.sh/docs/documentation/swifttuiruntime/vision).

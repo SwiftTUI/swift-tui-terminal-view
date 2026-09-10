@@ -7,9 +7,9 @@ name: Test
 # //:swift_tui_terminal_view_native_gate (swiftly-managed `swift test` + API check),
 # so a red here means the org gate would be red too.
 #
-# Lane shape (swift-tui-org plan 2026-08-25-001 Stage 4):
-#   * push / pull_request  — Linux `swift test` + API baseline, and the
-#                            API check. SwiftTerm and PTYs do not support WASI.
+# Lane shape:
+#   * push / pull_request  — Linux tests and API baseline; pushes also run
+#                            macOS if its lane inputs changed.
 #   * tag push (`*.*.*`)   — the above plus a release-configuration build on
 #                            Linux and the macOS suite; a release needs all of
 #                            them green.
@@ -107,9 +107,7 @@ jobs:
           Scripts/native_gate.sh
 
       # Release-configuration coverage belongs to the tag lane (and to an
-      # explicit dispatch), not to every push: on the hot path it was a
-      # 3.7-minute duplicate compile of a package the debug build had just
-      # verified.
+      # explicit dispatch). Ordinary pushes validate the debug build.
       - name: Release build
         if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
         shell: bash
@@ -118,20 +116,14 @@ jobs:
           . "${SWIFTLY_HOME_DIR}/env.sh"
           swiftly run swift build -c release
 
-  # Skip-if-unchanged guard for the macOS lane (plan 2026-08-25-001 §6): on a
-  # schedule, a green verdict already recorded for this exact commit means the
-  # whole lane exits here in under a minute. Dispatch and tag pushes always
-  # run; branch pushes and PRs never reach this job.
+  # Skip-if-unchanged guard for the macOS lane. Dispatch and tag pushes
+  # always run; ordinary pushes and schedules can reuse a green verdict.
   changes:
     name: Skip macOS lane if unchanged
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push'
-    # Re-enabled on pushes to main (2026-08-27, operator request). The
-    # lane-verdict probe above still skips the run in under a minute when
-    # none of its inputs moved, so this costs a macOS runner only when there
-    # is something new to verify.
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -149,9 +141,7 @@ jobs:
 
   macos:
     name: SwiftTUITerminalView tests (macOS)
-    # Off the push path (plan 2026-08-25-001 Stage 4): the Linux job carries
-    # the per-push signal for this platform-portable package; macOS runs
-    # nightly-if-changed, at every tag (required for a release), and on demand.
+    # The probe decides whether this revision needs macOS verification.
     needs: changes
     if: needs.changes.outputs.changed == 'true'
     runs-on: macos-26
