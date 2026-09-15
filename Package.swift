@@ -1,4 +1,4 @@
-// swift-tools-version: 6.3
+// swift-tools-version: 6.4
 import PackageDescription
 
 func swiftSettings(_ settings: PackageDescription.SwiftSetting...) -> [PackageDescription
@@ -23,7 +23,7 @@ let package = Package(
     .library(name: "SwiftTUITerminalView", targets: ["SwiftTUITerminalView"])
   ],
   dependencies: [
-    .package(url: "https://github.com/SwiftTUI/swift-tui.git", exact: "0.13.3"),
+    .package(url: "https://github.com/SwiftTUI/swift-tui.git", exact: "0.13.4"),
     .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.18.0"),
     .package(url: "https://github.com/swiftlang/swift-docc-plugin.git", from: "1.5.0"),
   ],
