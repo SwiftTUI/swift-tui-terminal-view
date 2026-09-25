@@ -3,8 +3,8 @@
 ## Add the package
 
 ```swift
-.package(url: "https://github.com/SwiftTUI/swift-tui.git", exact: "0.14.0"),
-.package(url: "https://github.com/SwiftTUI/swift-tui-terminal-view.git", exact: "0.14.0"),
+.package(url: "https://github.com/SwiftTUI/swift-tui.git", exact: "0.15.0"),
+.package(url: "https://github.com/SwiftTUI/swift-tui-terminal-view.git", exact: "0.15.0"),
 ```
 
 Add `.product(name: "SwiftTUITerminalView", package: "swift-tui-terminal-view")`
