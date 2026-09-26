@@ -69,6 +69,17 @@
       #expect(events.contains(.workingDirectoryChanged("file:///tmp/swift-tui")))
     }
 
+    @Test("pointer cancellation emits no terminal action and leaves the next press usable")
+    func mouseCancellation() async {
+      let emulator = TerminalEmulator(size: CellSize(width: 10, height: 4))
+      _ = await emulator.feed(Array("\u{1B}[?1000h\u{1B}[?1006h".utf8))
+      let down = TerminalEmulatorMouse(kind: .down(.primary), cell: CellPoint(x: 2, y: 1))
+      let first = await emulator.send(mouse: down)
+      #expect(!first.isEmpty)
+      #expect(await emulator.send(mouse: .init(kind: .cancelled, cell: down.cell)).isEmpty)
+      #expect(await emulator.send(mouse: down) == first)
+    }
+
     @Test("SGR mouse protocol encodes terminal-coordinate button presses")
     func sgrMousePress() async {
       let emulator = TerminalEmulator(size: CellSize(width: 10, height: 3))

@@ -67,6 +67,10 @@
 
     public func send(mouse: TerminalEmulatorMouse) -> [UInt8] {
       switch mouse.kind {
+      case .cancelled:
+        // Terminal mouse protocols have no cancellation packet. In particular,
+        // do not synthesize a release that a child app could treat as a click.
+        return []
       case .down(let button):
         terminal.sendEvent(
           buttonFlags: buttonFlags(for: button, release: false, modifiers: mouse.modifiers),

@@ -17,3 +17,8 @@ The umbrella re-exports Runtime, PTYPrimitives, and Emulation. Tests use the
 existing public testing support product for view input and lifecycle checks;
 they never testably import framework internals. Presentation planner byte-budget
 regressions live in the framework, while real-process output coverage lives here.
+
+Pointer cancellation emits no terminal mouse packet: legacy terminal protocols
+have no cancellation message, and a synthetic release could activate a child
+control. New runtime event kinds map conservatively to cancellation while the
+package remains buildable with its tagged framework dependency.

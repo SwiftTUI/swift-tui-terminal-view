@@ -16,6 +16,7 @@
       case up(Button)
       case dragged(Button)
       case moved
+      case cancelled
       case scrolled(deltaX: Int, deltaY: Int)
     }
 
@@ -55,6 +56,11 @@
         self = .moved
       case .scrolled(let deltaX, let deltaY):
         self = .scrolled(deltaX: deltaX, deltaY: deltaY)
+      default:
+        // Cancellation was added after the package's tagged runtime baseline.
+        // Preserve native-tool builds with that baseline and conservatively
+        // cancel unrecognized events instead of inventing a mouse action.
+        self = .cancelled
       }
     }
   }

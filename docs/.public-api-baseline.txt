@@ -57,6 +57,7 @@ SwiftTUITerminalEmulation.TerminalEmulatorMouse.Button.secondary
 SwiftTUITerminalEmulation.TerminalEmulatorMouse.Button.wheelDown
 SwiftTUITerminalEmulation.TerminalEmulatorMouse.Button.wheelUp
 SwiftTUITerminalEmulation.TerminalEmulatorMouse.Kind
+SwiftTUITerminalEmulation.TerminalEmulatorMouse.Kind.cancelled
 SwiftTUITerminalEmulation.TerminalEmulatorMouse.Kind.down(_:)
 SwiftTUITerminalEmulation.TerminalEmulatorMouse.Kind.dragged(_:)
 SwiftTUITerminalEmulation.TerminalEmulatorMouse.Kind.moved
