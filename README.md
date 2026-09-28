@@ -41,6 +41,15 @@ The view, session, emulator, event, key, and mouse APIs keep their names.
 `ChildProcessPty` is supplied by the framework's `SwiftTUIPTYPrimitives` product,
 which this module re-exports alongside `SwiftTUIRuntime` and emulation.
 
+## Current source capabilities
+
+HEAD adds immutable content publication, negotiated Kitty keyboard input,
+visible selection/copy, bounded scrollback, pane-owned Sixel and Kitty image
+subsets, and host-controlled OSC 99 requests. The install snippet above uses
+the published 0.15.1 package; these additions require a later release.
+See [Terminal Embedding](Sources/SwiftTUITerminalView/SwiftTUITerminalView.docc/TerminalEmbedding.md)
+for input bindings, protocol subsets, limits and custom-session integration.
+
 ## Development
 
 Use `swiftly run swift test` or `Scripts/native_gate.sh`. Native gates run the

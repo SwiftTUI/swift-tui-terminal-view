@@ -1,6 +1,9 @@
 public import SwiftTUIRuntime
 
 public enum TerminalEmulatorEvent: Sendable, Equatable {
+  /// The session has published a new immutable frame, independently of metadata.
+  case contentChanged
+  case notification(TerminalNotification)
   case titleChanged(String)
   case workingDirectoryChanged(String)
   case clipboardWriteRequested([UInt8])

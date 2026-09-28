@@ -153,6 +153,56 @@ struct TerminalViewInputTests {
     #expect(session.sentKeys == [TerminalEmulatorKey(code: .arrowDown)])
   }
 
+  @Test("selection copy consumes keys only in the focused pane and reports refusal")
+  func selectionCopyIsolation() async throws {
+    let first = RecordingTerminalSession()
+    let second = RecordingTerminalSession()
+    let copies = Mutex<[String]>([])
+    let results = Mutex<[Bool]>([])
+    let runLoop = await makeTerminalViewRunLoop(
+      HStack {
+        TerminalView(session: first)
+        TerminalView(session: second)
+      }
+      .environment(
+        \.clipboardWriteAction,
+        ClipboardWriteAction { text in
+          copies.withLock { $0.append(text) }
+          return false
+        }
+      )
+      .terminalCopyCompleted { result in results.withLock { $0.append(result) } }
+    )
+    defer { runLoop.stop() }
+    await runLoop.press(KeyPress(.character("s"), modifiers: [.ctrl, .shift]))
+    await runLoop.press(KeyPress(.arrowRight))
+    await runLoop.press(KeyPress(.return))
+    #expect(copies.withLock { $0 } == ["ab"])
+    #expect(results.withLock { $0 } == [false])
+    #expect(first.sentKeys.isEmpty)
+    #expect(second.sentKeys.isEmpty)
+    runLoop.focusTracker.focusNext()
+    await runLoop.settle()
+    await runLoop.press(KeyPress(.character("x")))
+    await second.sentKeySignal.wait { !second.sentKeys.isEmpty }
+    #expect(first.sentKeys.isEmpty)
+    #expect(second.sentKeys == [.init(code: .character("x"))])
+  }
+
+  @Test("pointer selection copies the dragged range and reanchors the next drag")
+  func pointerSelection() async {
+    let runLoop = await makeTerminalViewRunLoop(TerminalView(session: RecordingTerminalSession()))
+    defer { runLoop.stop() }
+    for (start, end) in [(1, 3), (5, 6)] {
+      await runLoop.mouse(.init(kind: .down(.primary), location: Point(x: Double(start), y: 0)))
+      await runLoop.mouse(.init(kind: .dragged(.primary), location: Point(x: Double(end), y: 0)))
+      await runLoop.mouse(.init(kind: .up(.primary), location: Point(x: Double(end), y: 0)))
+      await runLoop.press(KeyPress(.return))
+    }
+    let actual = runLoop.host.clipboardWrites
+    #expect(actual == ["bcd", "fg"])
+  }
+
   @Test("maps focused character key presses to emulator keys")
   func mapsCharacterKeyPresses() {
     #expect(
@@ -230,6 +280,12 @@ private final class TerminalViewInputHarness {
   var barriers = 0
   var task: Task<Void, any Error>?
 
+  func mouse(_ event: MouseEvent) async {
+    let previousFrames = host.frames
+    input.sendMouse(event)
+    await host.frameSignal.wait { self.host.frames > previousFrames }
+  }
+
   func press(_ key: KeyPress) async {
     input.send(key)
     await settle()
@@ -289,7 +345,9 @@ private final class RecordingTerminalSession: TerminalSession {
   }
 
   var cachedSnapshot: ForeignGrid {
-    .empty
+    ForeignGrid(
+      size: .init(width: 10, height: 1),
+      cells: [Array("abcdefghij").map { RasterCell(character: $0) }])
   }
 
   func start() async throws {}
@@ -331,10 +389,19 @@ private final class TerminalViewInputReader: TerminalInputReading {
 
   func inputEvents() -> AsyncStream<InputEvent> { pair.stream }
   func send(_ key: KeyPress) { pair.continuation.yield(.key(key)) }
+  func sendMouse(_ mouse: MouseEvent) { pair.continuation.yield(.mouse(mouse)) }
   func finish() { pair.continuation.finish() }
 }
 
-private final class TerminalViewInputHost: PresentationSurface, Sendable {
+private final class TerminalViewInputHost: PresentationSurface, ClipboardWritingPresentationSurface,
+  Sendable
+{
+  private let clipboardStorage = Mutex<[String]>([])
+  var clipboardWrites: [String] { clipboardStorage.withLock { $0 } }
+  func writeClipboard(_ text: String) -> Bool {
+    clipboardStorage.withLock { $0.append(text) }
+    return true
+  }
   private let frameStorage = Mutex(0)
   let frameSignal = ConditionSignal()
   var frames: Int { frameStorage.withLock { $0 } }

@@ -24,7 +24,7 @@ let package = Package(
   ],
   dependencies: [
     .package(url: "https://github.com/SwiftTUI/swift-tui.git", exact: "0.15.1"),
-    .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.18.0"),
+    .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.20.0"),
     .package(url: "https://github.com/swiftlang/swift-docc-plugin.git", from: "1.5.0"),
   ],
   targets: [

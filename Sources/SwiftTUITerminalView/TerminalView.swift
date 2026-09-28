@@ -1,192 +1,245 @@
 import SwiftTUIRuntime
 import SwiftTUITerminalEmulation
 
-/// Chooses whether a `TerminalView` key press belongs to its host or child session.
+/// Chooses whether a focused key belongs to the embedding host or its child.
 public enum TerminalViewKeyDisposition: Equatable, Sendable {
-  /// Convert the key press to a `TerminalEmulatorKey` and send it to the child session.
   case forwardToChild
-  /// Consume the key press without sending it to the child session.
   case handledByHost
 }
 
 public struct TerminalView<Session: TerminalSession>: View {
-  @State private var updateGeneration: UInt64 = 0
-
   private let session: Session
   private let keyRouting: @MainActor @Sendable (KeyPress) -> TerminalViewKeyDisposition
   private let onTitleChange: (@MainActor @Sendable (String) -> Void)?
   private let onExit: (@MainActor @Sendable (TerminalExitReason) -> Void)?
-  private let acceptsFocusedInput: Bool
 
-  /// Creates a view that presents and drives a terminal session, forwarding focused keys to the
-  /// child.
-  ///
-  /// - Parameters:
-  ///   - session: The child terminal session to present.
-  ///   - onTitleChange: An optional callback for child terminal title changes.
-  ///   - onExit: An optional callback when the child session exits.
   public init(
     session: Session,
     onTitleChange: (@MainActor @Sendable (String) -> Void)? = nil,
     onExit: (@MainActor @Sendable (TerminalExitReason) -> Void)? = nil
   ) {
     self.init(
-      session: session,
-      keyRouting: { _ in .forwardToChild },
-      onTitleChange: onTitleChange,
-      onExit: onExit
-    )
+      session: session, keyRouting: { _ in .forwardToChild }, onTitleChange: onTitleChange,
+      onExit: onExit)
   }
 
-  /// Creates a view that presents and drives a terminal session with host-level key routing.
-  ///
-  /// - Parameters:
-  ///   - session: The child terminal session to present.
-  ///   - keyRouting: A host-level interceptor called with the original focused key press, before
-  ///     conversion to `TerminalEmulatorKey`. Return
-  ///     ``TerminalViewKeyDisposition/handledByHost`` to consume it in the host or
-  ///     ``TerminalViewKeyDisposition/forwardToChild`` to preserve terminal forwarding.
-  ///   - onTitleChange: An optional callback for child terminal title changes.
-  ///   - onExit: An optional callback when the child session exits.
+  /// The host interceptor runs before selection, history, or child encoding.
   public init(
     session: Session,
     keyRouting: @escaping @MainActor @Sendable (KeyPress) -> TerminalViewKeyDisposition,
     onTitleChange: (@MainActor @Sendable (String) -> Void)? = nil,
     onExit: (@MainActor @Sendable (TerminalExitReason) -> Void)? = nil
-  ) {
-    self.init(
-      session: session,
-      keyRouting: keyRouting,
-      onTitleChange: onTitleChange,
-      onExit: onExit,
-      acceptsFocusedInput: true
-    )
-  }
-
-  private init(
-    session: Session,
-    keyRouting: @escaping @MainActor @Sendable (KeyPress) -> TerminalViewKeyDisposition,
-    onTitleChange: (@MainActor @Sendable (String) -> Void)?,
-    onExit: (@MainActor @Sendable (TerminalExitReason) -> Void)?,
-    acceptsFocusedInput: Bool
   ) {
     self.session = session
     self.keyRouting = keyRouting
     self.onTitleChange = onTitleChange
     self.onExit = onExit
-    self.acceptsFocusedInput = acceptsFocusedInput
   }
 
   public var body: some View {
-    let generation = updateGeneration
-    EnvironmentReader(\.terminalEventHandlers) { terminalEventHandlers in
-      EnvironmentReader(\.clipboardWriteAction) { clipboardWriteAction in
-        GeometryReader { proxy in
-          let surface =
-            ForeignSurface(payload: SessionGridPayload(session: session, generation: generation))
-            .task(
-              id: TerminalViewLifecycleID(session: ObjectIdentifier(session), size: proxy.size)
-            ) {
-              let events = session.events()
-              try? await session.start()
-              try? await session.resize(proxy.size)
-
-              for await event in events {
-                updateGeneration &+= 1
-                switch event {
-                case .titleChanged(let title):
-                  onTitleChange?(title)
-                  terminalEventHandlers.titleChanged?(title)
-                case .workingDirectoryChanged(let directory):
-                  terminalEventHandlers.workingDirectoryChanged?(directory)
-                case .clipboardWriteRequested(let bytes):
-                  _ = clipboardWriteAction(String(decoding: bytes, as: UTF8.self))
-                default:
-                  break
-                }
-              }
-
-              if case .exited(let reason) = await session.currentLifecycle() {
-                onExit?(reason)
-              }
-            }
-
-          surface
-            .focusable(acceptsFocusedInput)
-            .onKeyPress { keyPress in
-              acceptsFocusedInput ? handleFocusedKey(keyPress) : .ignored
-            }
-        }
-      }
-    }
-  }
-
-  @MainActor
-  fileprivate func withoutFocusedInput() -> TerminalView<Session> {
-    TerminalView(
-      session: session,
-      keyRouting: keyRouting,
-      onTitleChange: onTitleChange,
-      onExit: onExit,
-      acceptsFocusedInput: false
+    TerminalViewContent<Session, Int>(
+      session: session, keyRouting: keyRouting, onTitleChange: onTitleChange, onExit: onExit,
+      focusBinding: nil, focusValue: nil
     )
   }
 
-  @MainActor
-  fileprivate func handleFocusedKey(_ keyPress: KeyPress) -> KeyPressResult {
-    guard keyRouting(keyPress) == .forwardToChild else {
-      return .handled
-    }
-    guard let key = TerminalEmulatorKey(keyPress: keyPress) else {
-      return .ignored
-    }
-    Task {
-      await session.send(key: key)
-    }
-    return .handled
-  }
-}
-
-extension TerminalView {
-  /// Binds host focus directly to this terminal's framework-owned input member.
-  ///
-  /// Use this modifier when an embedding host owns an enum-valued focus model.
-  /// The focused member still applies ``TerminalViewKeyDisposition`` before
-  /// forwarding keys to the child session.
+  /// Binds the host's focus model to the same member that owns pane interaction.
   @MainActor
   public func hostFocused<Value: Hashable>(
     _ binding: FocusState<Value?>.Binding,
     equals value: Value
   ) -> some View {
-    TerminalViewHostFocused(
-      terminalView: self,
-      binding: binding,
-      value: value
+    TerminalViewContent(
+      session: session, keyRouting: keyRouting, onTitleChange: onTitleChange, onExit: onExit,
+      focusBinding: binding, focusValue: value
     )
   }
 }
 
-@MainActor
-private struct TerminalViewHostFocused<Session: TerminalSession, Value: Hashable>: View {
-  private let terminalView: TerminalView<Session>
-  private let binding: FocusState<Value?>.Binding
-  private let value: Value
+private struct TerminalViewContent<Session: TerminalSession, Focus: Hashable>: View {
+  @FocusState private var localFocus: Bool
+  @State private var updateGeneration: UInt64 = 0
+  @State private var selection: TerminalTextSelection?
 
-  fileprivate init(
-    terminalView: TerminalView<Session>,
-    binding: FocusState<Value?>.Binding,
-    value: Value
-  ) {
-    self.terminalView = terminalView
-    self.binding = binding
-    self.value = value
+  let session: Session
+  let keyRouting: @MainActor @Sendable (KeyPress) -> TerminalViewKeyDisposition
+  let onTitleChange: (@MainActor @Sendable (String) -> Void)?
+  let onExit: (@MainActor @Sendable (TerminalExitReason) -> Void)?
+  let focusBinding: FocusState<Focus?>.Binding?
+  let focusValue: Focus?
+
+  var body: some View {
+    _ = updateGeneration
+    let frame = session.cachedTerminalSnapshot
+    let isFocused = focusBinding.map { $0.wrappedValue == focusValue } ?? localFocus
+    return EnvironmentReader(\.terminalEventHandlers) { handlers in
+      EnvironmentReader(\.clipboardWriteAction) { clipboard in
+        // Wheel and drag routes have distinct members; neither replaces the other.
+        VStack(spacing: 0) {
+          focused(
+            content(handlers: handlers, clipboard: clipboard)
+              .focusable(true)
+              .onKeyPress { key in
+                handleKey(
+                  key, frame: session.cachedTerminalSnapshot, clipboard: clipboard,
+                  handlers: handlers)
+              }
+              .gesture(
+                DragGesture(minimumDistance: 0).onChanged { value in
+                  let source = selection?.snapshot ?? frame
+                  var next = TerminalTextSelection(
+                    snapshot: source, anchor: cell(value.startLocation))
+                  next.extend(to: cell(value.location))
+                  selection = next
+                },
+                including: selection != nil || !frame.mouseTracking ? .all : .none
+              )
+          )
+        }
+        .onScrollWheel { wheel in
+          guard isFocused, selection != nil || !frame.mouseTracking || !frame.isFollowingOutput
+          else { return .ignored }
+          selection = nil
+          Task { await session.scroll(by: wheel.deltaY) }
+          return .handled
+        }
+      }
+    }
   }
 
-  public var body: some View {
-    terminalView.withoutFocusedInput()
-      .focusable(true)
-      .focused(binding, equals: value)
-      .onKeyPress(perform: terminalView.handleFocusedKey)
+  @ViewBuilder
+  private func focused<Content: View>(_ view: Content) -> some View {
+    if let focusBinding, let focusValue {
+      view.focused(focusBinding, equals: focusValue)
+    } else {
+      view.focused($localFocus)
+    }
+  }
+
+  private func content(handlers: TerminalEventHandlers, clipboard: ClipboardWriteAction)
+    -> some View
+  {
+    GeometryReader { proxy in
+      let frame = session.cachedTerminalSnapshot
+      ForeignSurface(payload: SessionGridPayload(grid: selection?.highlightedGrid ?? frame.grid))
+        .overlay(alignment: .topLeading) {
+          ForEach(selection?.snapshot.graphics ?? frame.graphics) { graphic in
+            Image(data: graphic.png).resizable()
+              .frame(width: graphic.bounds.size.width, height: graphic.bounds.size.height)
+              .offset(x: graphic.bounds.origin.x, y: graphic.bounds.origin.y)
+              .allowsHitTesting(false)
+          }
+        }
+        .clipped()
+        .task(id: TerminalViewLifecycleID(session: ObjectIdentifier(session), size: proxy.size)) {
+          // Task-local ownership survives view-state removal and closes
+          // outstanding host requests when a pane detaches or resizes.
+          var activeNotifications: Set<TerminalNotificationID> = []
+          defer {
+            for id in activeNotifications {
+              handlers.notification?(TerminalNotification(id: id, kind: .close))
+            }
+          }
+          let events = session.events()
+          try? await session.start()
+          try? await session.resize(proxy.size)
+          for await event in events {
+            updateGeneration &+= 1
+            if let selection, selection.snapshot.epoch != session.cachedTerminalSnapshot.epoch {
+              self.selection = nil
+            }
+            switch event {
+            case .notification(let notification):
+              if notification.kind == .show {
+                activeNotifications.insert(notification.id)
+              } else {
+                activeNotifications.remove(notification.id)
+              }
+              handlers.notification?(notification)
+            case .titleChanged(let title):
+              onTitleChange?(title)
+              handlers.titleChanged?(title)
+            case .workingDirectoryChanged(let directory):
+              handlers.workingDirectoryChanged?(directory)
+            case .clipboardWriteRequested(let bytes):
+              _ = clipboard(String(decoding: bytes, as: UTF8.self))
+            default: break
+            }
+          }
+          if case .exited(let reason) = await session.currentLifecycle() {
+            onExit?(reason)
+          }
+        }
+    }
+
+  }
+
+  private func cell(_ point: Point) -> CellPoint {
+    CellPoint(x: Int(point.x.rounded(.down)), y: Int(point.y.rounded(.down)))
+  }
+
+  private func handleKey(
+    _ key: KeyPress, frame: TerminalSnapshot, clipboard: ClipboardWriteAction,
+    handlers: TerminalEventHandlers
+  ) -> KeyPressResult {
+    guard keyRouting(key) == .forwardToChild else { return .handled }
+    if key.modifiers.contains([.ctrl, .shift]),
+      key.key == .character("s") || key.key == .character("S")
+    {
+      selection = TerminalTextSelection(snapshot: frame, anchor: .zero)
+      return .handled
+    }
+    if var selected = selection {
+      switch key.key {
+      case .escape: selection = nil
+      case .return:
+        let copied = clipboard(selected.text)
+        handlers.copyCompleted?(copied)
+      case .character(let c) where (c == "c" || c == "C") && key.modifiers.contains(.ctrl):
+        let copied = clipboard(selected.text)
+        handlers.copyCompleted?(copied)
+      case .arrowLeft:
+        selected.extend(to: CellPoint(x: selected.focus.x - 1, y: selected.focus.y))
+        selection = selected
+      case .arrowRight:
+        selected.extend(to: CellPoint(x: selected.focus.x + 1, y: selected.focus.y))
+        selection = selected
+      case .arrowUp:
+        selected.extend(to: CellPoint(x: selected.focus.x, y: selected.focus.y - 1))
+        selection = selected
+      case .arrowDown:
+        selected.extend(to: CellPoint(x: selected.focus.x, y: selected.focus.y + 1))
+        selection = selected
+      case .home:
+        selected.extend(to: CellPoint(x: 0, y: selected.focus.y))
+        selection = selected
+      case .end:
+        selected.extend(to: CellPoint(x: frame.grid.size.width - 1, y: selected.focus.y))
+        selection = selected
+      default: break
+      }
+      return .handled
+    }
+    if !frame.isFollowingOutput
+      || key.modifiers.contains(.shift) && (key.key == .pageUp || key.key == .pageDown)
+    {
+      switch key.key {
+      case .escape, .end:
+        Task { await session.resumeFollowingOutput() }
+      case .pageUp:
+        Task { await session.scroll(by: -max(1, frame.grid.size.height - 1)) }
+      case .pageDown:
+        Task { await session.scroll(by: max(1, frame.grid.size.height - 1)) }
+      case .arrowUp: Task { await session.scroll(by: -1) }
+      case .arrowDown: Task { await session.scroll(by: 1) }
+      case .home: Task { await session.scroll(by: -100_000) }
+      default: break
+      }
+      return .handled
+    }
+    guard let key = TerminalEmulatorKey(keyPress: key) else { return .ignored }
+    Task { await session.send(key: key) }
+    return .handled
   }
 }
 
@@ -195,12 +248,7 @@ private struct TerminalViewLifecycleID: Equatable {
   var size: CellSize
 }
 
-private struct SessionGridPayload<Session: TerminalSession>: ForeignSurfacePayload {
-  let session: Session
-  let generation: UInt64
-
-  var grid: ForeignGrid {
-    _ = generation
-    return session.cachedSnapshot
-  }
+// Draw trees retain the frame they rendered, so previous frames cannot read newer session state.
+struct SessionGridPayload: ForeignSurfacePayload {
+  let grid: ForeignGrid
 }

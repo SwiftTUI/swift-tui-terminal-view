@@ -57,52 +57,125 @@ public struct TerminalEmulatorKey: Sendable, Equatable, Hashable {
     )
   }
 
+  /// Legacy text uses the character supplied by the host (already keyboard-layout resolved).
   public var legacyByteSequence: [UInt8] {
+    legacyBytes(applicationCursor: false)
+  }
+
+  func legacyBytes(applicationCursor: Bool) -> [UInt8] {
+    let alt: [UInt8] = modifiers.contains(.option) ? [0x1B] : []
     switch code {
     case .character(let character):
-      return Array(String(character).utf8)
-    case .enter:
-      return [0x0D]
-    case .backspace:
-      return [0x7F]
-    case .escape:
-      return [0x1B]
+      if modifiers.contains(.control), character.unicodeScalars.count == 1,
+        let scalar = character.unicodeScalars.first,
+        let control = Self.controlByte(scalar.value)
+      {
+        return alt + [control]
+      }
+      return alt + Array(String(character).utf8)
+    case .enter: return alt + [13]
+    case .escape: return alt + [27]
+    case .backspace: return alt + [modifiers.contains(.control) ? 8 : 127]
+    case .tab: return alt + (modifiers.contains(.shift) ? Array("\u{1B}[Z".utf8) : [9])
+    default:
+      return functionalBytes(kitty: false, applicationCursor: applicationCursor)
+    }
+  }
+
+  // Only flags for information the public KeyPress contract can provide are negotiated:
+  // disambiguation, all supplied keys, and associated Unicode text. No event phases or alternates.
+  static let supportedKeyboardFlags = 1 | 8 | 16
+
+  func kittyBytes(flags: Int, applicationCursor: Bool) -> [UInt8] {
+    let allKeys = flags & 8 != 0
+    let disambiguate = flags & 1 != 0 || allKeys
+    guard disambiguate else { return legacyBytes(applicationCursor: applicationCursor) }
+    switch code {
+    case .character(let character):
+      guard allKeys || !modifiers.intersection([.control, .option]).isEmpty else {
+        return Array(String(character).utf8)
+      }
+      let scalars = String(character).unicodeScalars.map(\.value)
+      if allKeys && flags & 16 != 0 && modifiers.intersection([.control, .option]).isEmpty {
+        guard let first = scalars.first else { return [] }
+        return csiU(first, text: scalars)
+      }
+      return scalars.flatMap { csiU($0) }
+    case .escape: return csiU(27)
+    case .enter: return allKeys ? csiU(13) : legacyBytes(applicationCursor: false)
+    case .backspace: return allKeys ? csiU(127) : legacyBytes(applicationCursor: false)
     case .tab:
-      return [0x09]
-    case .arrowUp:
-      return [0x1B, 0x5B, 0x41]
-    case .arrowDown:
-      return [0x1B, 0x5B, 0x42]
-    case .arrowRight:
-      return [0x1B, 0x5B, 0x43]
-    case .arrowLeft:
-      return [0x1B, 0x5B, 0x44]
-    case .home:
-      return [0x1B, 0x5B, 0x48]
-    case .end:
-      return [0x1B, 0x5B, 0x46]
-    case .insert:
-      return [0x1B, 0x5B, 0x32, 0x7E]
-    case .delete:
-      return [0x1B, 0x5B, 0x33, 0x7E]
-    case .pageUp:
-      return [0x1B, 0x5B, 0x35, 0x7E]
-    case .pageDown:
-      return [0x1B, 0x5B, 0x36, 0x7E]
-    case .function(let number) where (1...4).contains(number):
-      return [0x1B, 0x4F, UInt8(0x50 + number - 1)]
-    case .function(let number):
-      let codes: [Int: [UInt8]] = [
-        5: [0x31, 0x35, 0x7E],
-        6: [0x31, 0x37, 0x7E],
-        7: [0x31, 0x38, 0x7E],
-        8: [0x31, 0x39, 0x7E],
-        9: [0x32, 0x30, 0x7E],
-        10: [0x32, 0x31, 0x7E],
-        11: [0x32, 0x33, 0x7E],
-        12: [0x32, 0x34, 0x7E],
-      ]
-      return [0x1B, 0x5B] + (codes[number] ?? [])
+      return allKeys ? csiU(9) : legacyBytes(applicationCursor: false)
+    default:
+      return functionalBytes(kitty: true, applicationCursor: false)
+    }
+  }
+
+  private var wireModifiers: Int {
+    1 + (modifiers.contains(.shift) ? 1 : 0)
+      + (modifiers.contains(.option) ? 2 : 0)
+      + (modifiers.contains(.control) ? 4 : 0)
+  }
+
+  private func csiU(_ scalar: UInt32, text: [UInt32] = []) -> [UInt8] {
+    // ASCII letters use their unshifted identity; no keyboard-layout alternatives are invented.
+    let code = modifiers.contains(.shift) && (65...90).contains(scalar) ? scalar + 32 : scalar
+    var body = String(code)
+    if wireModifiers != 1 { body += ";\(wireModifiers)" }
+    if !text.isEmpty {
+      body += (wireModifiers == 1 ? ";;" : ";") + text.map(String.init).joined(separator: ":")
+    }
+    return Array("\u{1B}[\(body)u".utf8)
+  }
+
+  private func functionalBytes(kitty: Bool, applicationCursor: Bool) -> [UInt8] {
+    let letter: String?
+    switch code {
+    case .arrowUp: letter = "A"
+    case .arrowDown: letter = "B"
+    case .arrowRight: letter = "C"
+    case .arrowLeft: letter = "D"
+    case .home: letter = "H"
+    case .end: letter = "F"
+    case .function(let n) where (1...4).contains(n) && !(kitty && n == 3):
+      letter = ["P", "Q", "R", "S"][n - 1]
+    default: letter = nil
+    }
+    if let letter {
+      if wireModifiers != 1 { return Array("\u{1B}[1;\(wireModifiers)\(letter)".utf8) }
+      let useSS3: Bool
+      if case .function = code { useSS3 = !kitty } else { useSS3 = applicationCursor }
+      return Array("\u{1B}\(useSS3 ? "O" : "[")\(letter)".utf8)
+    }
+    let number: Int
+    switch code {
+    case .insert: number = 2
+    case .delete: number = 3
+    case .pageUp: number = 5
+    case .pageDown: number = 6
+    case .function(3) where kitty: number = 13
+    case .function(let n) where (5...12).contains(n):
+      number = [15, 17, 18, 19, 20, 21, 23, 24][n - 5]
+    case .function(let n) where kitty && (13...35).contains(n):
+      return csiU(UInt32(57376 + n - 13))
+    default: return []
+    }
+    let modifier = wireModifiers == 1 ? "" : ";\(wireModifiers)"
+    return Array("\u{1B}[\(number)\(modifier)~".utf8)
+  }
+
+  private static func controlByte(_ scalar: UInt32) -> UInt8? {
+    if (65...90).contains(scalar) { return UInt8(scalar - 64) }
+    if (97...122).contains(scalar) { return UInt8(scalar - 96) }
+    switch scalar {
+    case 32, 50, 64: return 0
+    case 51, 91: return 27
+    case 52, 92: return 28
+    case 53, 93: return 29
+    case 54, 94, 126: return 30
+    case 47, 55, 95: return 31
+    case 56, 63: return 127
+    default: return nil
     }
   }
 }

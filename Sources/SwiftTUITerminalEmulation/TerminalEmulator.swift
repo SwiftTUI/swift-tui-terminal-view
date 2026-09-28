@@ -5,20 +5,85 @@ public import SwiftTUIRuntime
 public actor TerminalEmulator {
   private let terminal: Terminal
   private let delegate: EmulatorDelegate
+  private var generation: UInt64 = 0
+  private var cachedGrid: ForeignGrid?
+  private var viewportTop: Int?
+  private var epoch: UInt64 = 0
+  private var framer = TerminalControlFramer()
+  private var graphics = TerminalGraphicsStore()
+  private var notifications = TerminalNotificationParser()
 
-  public init(size: CellSize) {
+  public init(size: CellSize, scrollbackLimit: Int = 2_000) {
     let delegate = EmulatorDelegate()
     self.delegate = delegate
     self.terminal = Terminal(
       delegate: delegate,
-      options: TerminalOptions(cols: size.width, rows: size.height)
+      options: TerminalOptions(
+        cols: size.width, rows: size.height, scrollback: max(0, min(100_000, scrollbackLimit)))
     )
     self.terminal.silentLog = true
     self.terminal.registerOscHandler(code: 133) { _ in }
   }
 
   public func feed(_ bytes: [UInt8]) -> [TerminalEmulatorEvent] {
-    terminal.feed(byteArray: bytes)
+    for chunk in framer.feed(bytes) {
+      let previousBuffer = ObjectIdentifier(terminal.buffer)
+      switch chunk {
+      case .terminal(let bytes): terminal.feed(byteArray: bytes)
+      case .erase(let bytes):
+        graphics.clear(alternate: terminal.isCurrentBufferAlternate)
+        terminal.feed(byteArray: bytes)
+      case .reset:
+        epoch &+= 1
+        viewportTop = nil
+        cachedGrid = nil
+        for notification in notifications.reset() { delegate.record(.notification(notification)) }
+        graphics.clear()
+        terminal.feed(byteArray: [27, 99])
+      case .osc(let bytes):
+        if bytes.starts(with: [57, 57, 59]) {
+          if let notification = notifications.parse(bytes) {
+            delegate.record(.notification(notification))
+          }
+        } else {
+          terminal.feed(byteArray: [27, 93] + bytes + [7])
+        }
+      case .apc(let bytes):
+        let row =
+          terminal.buffer.totalLinesTrimmed + terminal.getTopVisibleRow()
+          + terminal.getCursorLocation().y
+        if let reply = graphics.kitty(
+          bytes, row: row, column: terminal.getCursorLocation().x,
+          alternate: terminal.isCurrentBufferAlternate)
+        {
+          delegate.record(.clientReply(reply))
+        }
+      case .dcs(let bytes):
+        if let normalized = TerminalSixelPreflight.normalized(bytes) {
+          let row =
+            terminal.buffer.totalLinesTrimmed + terminal.getTopVisibleRow()
+            + terminal.getCursorLocation().y
+          let column = terminal.getCursorLocation().x
+          terminal.feed(byteArray: normalized)
+          for bitmap in delegate.drainBitmaps() {
+            graphics.addSixel(
+              rgba: bitmap.bytes, width: bitmap.width, height: bitmap.height, row: row,
+              column: column, alternate: terminal.isCurrentBufferAlternate)
+          }
+        } else if !TerminalSixelPreflight.isSixel(bytes) {
+          terminal.feed(byteArray: [27, 80] + bytes + [27, 92])
+        }
+      }
+      if ObjectIdentifier(terminal.buffer) != previousBuffer {
+        epoch &+= 1
+        viewportTop = nil
+        cachedGrid = nil
+        graphics.clear(alternate: true)
+      }
+    }
+    graphics.evict(
+      before: terminal.buffer.totalLinesTrimmed, alternate: terminal.isCurrentBufferAlternate)
+    generation &+= 1
     var events = delegate.drainEvents()
     events.append(contentsOf: Self.mouseProtocolEvents(in: bytes))
     return events
@@ -27,10 +92,19 @@ public actor TerminalEmulator {
   public func snapshot() -> ForeignGrid {
     let cols = terminal.cols
     let rows = terminal.rows
-    var cells: [[RasterCell]] = []
-    cells.reserveCapacity(rows)
+    let size = CellSize(width: cols, height: rows)
+    let needsFullSnapshot = cachedGrid?.size != size
+    let range = terminal.getUpdateRange()
+    if !needsFullSnapshot && range == nil, let cachedGrid {
+      return cachedGrid
+    }
+    var cells = cachedGrid?.cells ?? []
+    if needsFullSnapshot {
+      cells = Array(repeating: [], count: rows)
+    }
 
-    for y in 0..<rows {
+    for y in 0..<rows
+    where needsFullSnapshot || (range.map { y >= $0.startY && y <= $0.endY } ?? false) {
       var row: [RasterCell] = []
       row.reserveCapacity(cols)
       for x in 0..<cols {
@@ -38,21 +112,93 @@ public actor TerminalEmulator {
           row.append(.empty)
           continue
         }
-        row.append(Self.rasterCell(from: charData, terminal: terminal))
+        var cell = Self.rasterCell(from: charData, terminal: terminal)
+        if charData.width == 0, x > 0, row.last?.spanWidth == 2 {
+          cell.continuationLeadX = x - 1
+        }
+        row.append(cell)
       }
-      cells.append(row)
+      cells[y] = row
     }
 
-    return ForeignGrid(size: CellSize(width: cols, height: rows), cells: cells)
+    let grid = ForeignGrid(size: size, cells: cells)
+    cachedGrid = grid
+    terminal.clearUpdateRange()
+    return grid
+  }
+
+  /// Captures the frame and its ordering token in one actor operation.
+  public func captureSnapshot() -> TerminalSnapshot {
+    let oldest = terminal.buffer.totalLinesTrimmed
+    let liveTop = oldest + terminal.getTopVisibleRow()
+    let top = max(oldest, min(liveTop, viewportTop ?? liveTop))
+    if viewportTop != nil { viewportTop = top }
+    let grid: ForeignGrid
+    if viewportTop == nil {
+      grid = snapshot()
+    } else {
+      var cells: [[RasterCell]] = []
+      for y in 0..<terminal.rows {
+        let line = terminal.getScrollInvariantLine(row: top + y)
+        var row: [RasterCell] = []
+        for x in 0..<terminal.cols {
+          guard let line, x < line.count else {
+            row.append(.empty)
+            continue
+          }
+          var cell = Self.rasterCell(from: line[x], terminal: terminal)
+          if line[x].width == 0, x > 0, row.last?.spanWidth == 2 { cell.continuationLeadX = x - 1 }
+          row.append(cell)
+        }
+        cells.append(row)
+      }
+      grid = ForeignGrid(size: CellSize(width: terminal.cols, height: terminal.rows), cells: cells)
+    }
+    return TerminalSnapshot(
+      generation: generation, grid: grid,
+      wrappedRows: (0..<terminal.rows).map {
+        terminal.getScrollInvariantLine(row: top + $0)?.isWrapped ?? false
+      },
+      firstRow: top, retainedRows: oldest...max(oldest, liveTop + terminal.rows - 1),
+      epoch: epoch, buffer: terminal.isCurrentBufferAlternate ? .alternate : .normal,
+      isFollowingOutput: viewportTop == nil, mouseTracking: terminal.mouseMode != .off,
+      graphics: graphics.snapshot(top: top, alternate: terminal.isCurrentBufferAlternate)
+    )
   }
 
   public func resize(_ size: CellSize) {
+    generation &+= 1
+    epoch &+= 1
+    viewportTop = nil
+    cachedGrid = nil
+    graphics.clear()
     terminal.resize(cols: size.width, rows: size.height)
     delegate.record(.sizeReported(CellSize(width: terminal.cols, height: terminal.rows)))
   }
 
+  /// Moves the viewport without changing the child's live cursor or display buffer.
+  /// Negative values move toward older output. Alternate-screen history is disabled.
+  public func scroll(by lines: Int) {
+    guard !terminal.isCurrentBufferAlternate else { return }
+    let oldest = terminal.buffer.totalLinesTrimmed
+    let liveTop = oldest + terminal.getTopVisibleRow()
+    let current = viewportTop ?? liveTop
+    let delta = max(-100_000, min(100_000, lines))
+    viewportTop = max(oldest, min(liveTop, current + delta))
+    generation &+= 1
+  }
+
+  public func resumeFollowingOutput() {
+    viewportTop = nil
+    generation &+= 1
+  }
+
   public func encode(key: TerminalEmulatorKey) -> [UInt8] {
-    key.legacyByteSequence
+    key.kittyBytes(
+      flags: terminal.keyboardEnhancementFlags.rawValue
+        & TerminalEmulatorKey.supportedKeyboardFlags,
+      applicationCursor: terminal.applicationCursor
+    )
   }
 
   public func encode(paste: String) -> [UInt8] {
@@ -312,6 +458,25 @@ private final class EmulatorDelegate: TerminalDelegate {
     return bytes
   }
 
+  struct Bitmap {
+    let bytes: [UInt8]
+    let width: Int
+    let height: Int
+  }
+  private var bitmaps: [Bitmap] = []
+
+  func createImageFromBitmap(source: Terminal, bytes: inout [UInt8], width: Int, height: Int) {
+    guard TerminalGraphicsStore.validDimensions(width, height), bytes.count == width * height * 4
+    else { return }
+    bitmaps.append(Bitmap(bytes: bytes, width: width, height: height))
+  }
+
+  func drainBitmaps() -> [Bitmap] {
+    let result = bitmaps
+    bitmaps.removeAll()
+    return result
+  }
+
   func setTerminalTitle(source: Terminal, title: String) {
     events.append(.titleChanged(title))
   }
@@ -323,7 +488,17 @@ private final class EmulatorDelegate: TerminalDelegate {
   }
 
   func send(source: Terminal, data: ArraySlice<UInt8>) {
-    events.append(.clientReply(Array(data)))
+    // SwiftTerm owns the incremental parser and the per-buffer negotiation stacks.
+    // Mask its query response to the information this host-facing key API supplies.
+    let response = String(decoding: data, as: UTF8.self)
+    if response.hasPrefix("\u{1B}[?"), response.hasSuffix("u"),
+      let flags = Int(response.dropFirst(3).dropLast())
+    {
+      let supported = flags & TerminalEmulatorKey.supportedKeyboardFlags
+      events.append(.clientReply(Array("\u{1B}[?\(supported)u".utf8)))
+    } else {
+      events.append(.clientReply(Array(data)))
+    }
   }
 
   func bell(source: Terminal) {

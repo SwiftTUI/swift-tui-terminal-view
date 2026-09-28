@@ -66,6 +66,97 @@ struct TerminalViewLayoutTests {
     #expect(try await task.value.exitReason == .inputEnded)
   }
 
+  @Test("plain content updates repaint alongside a sibling state change")
+  func contentAndSiblingUpdate() async throws {
+    let session = EventingTerminalSession(
+      grid: ForeignGrid(
+        size: CellSize(width: 8, height: 1),
+        cells: [Array(repeating: RasterCell(character: "a"), count: 8)]
+      ))
+    let input = ClipboardTerminalInputReader()
+    let host = ClipboardTerminalHost()
+    let identity = Identity(components: [.named("TerminalContentRoot")])
+    let state = StateContainer(initialState: 0, invalidationIdentities: [identity])
+    let runLoop = SwiftTUIRuntime.RunLoop(
+      rootIdentity: identity, presentationSurface: host, terminalInputReader: input,
+      signalReader: ClipboardSignalReader(), stateContainer: state,
+      focusTracker: FocusTracker(invalidationIdentities: [identity]),
+      proposal: ProposedSize(width: 8, height: 2), exitKeyBindings: .none,
+      viewBuilder: { value, _ in
+        VStack(spacing: 0) {
+          Text("state \(value)").frame(height: 1)
+          TerminalView(session: session).frame(height: 1)
+        }
+      }
+    )
+    let task = Task { try await runLoop.run() }
+    defer {
+      input.finish()
+      task.cancel()
+    }
+    await session.startedSignal.wait { session.isStarted }
+    await host.frameSignal.wait { host.text.contains("aaaaaaaa") }
+    session.setGrid(
+      ForeignGrid(
+        size: CellSize(width: 8, height: 1),
+        cells: [Array(repeating: RasterCell(character: "b"), count: 8)]
+      ))
+    state.mutate { $0 = 1 }
+    session.publish(.contentChanged)
+    await host.frameSignal.wait { host.text.contains("bbbbbbbb") && host.text.contains("state 1") }
+    #expect(!host.text.contains("aaaaaaaa"))
+    input.finish()
+    _ = try await task.value
+  }
+
+  @Test("notification policy can suppress one pane and receives closure on removal")
+  func notificationTeardown() async throws {
+    let first = EventingTerminalSession(grid: .empty)
+    let second = EventingTerminalSession(grid: .empty)
+    let input = ClipboardTerminalInputReader()
+    let host = ClipboardTerminalHost()
+    let identity = Identity(components: [.named("NotificationRoot")])
+    let state = StateContainer(initialState: 0, invalidationIdentities: [identity])
+    let received = Mutex<[TerminalNotification]>([])
+    let signal = ConditionSignal()
+    let loop = SwiftTUIRuntime.RunLoop(
+      rootIdentity: identity, presentationSurface: host, terminalInputReader: input,
+      signalReader: ClipboardSignalReader(), stateContainer: state,
+      focusTracker: FocusTracker(invalidationIdentities: [identity]),
+      proposal: .init(width: 20, height: 4), exitKeyBindings: .none,
+      viewBuilder: { value, _ in
+        HStack {
+          if value == 0 {
+            TerminalView(session: first).terminalNotification { request in
+              received.withLock { $0.append(request) }
+              signal.notify()
+            }
+          }
+          TerminalView(session: second)  // No handler: host suppresses this pane.
+        }
+      }
+    )
+    let task = Task { try await loop.run() }
+    defer {
+      input.finish()
+      task.cancel()
+    }
+    await first.startedSignal.wait { first.isStarted }
+    await second.startedSignal.wait { second.isStarted }
+    let firstID = TerminalNotificationID(session: "first", identifier: "same")
+    first.publish(.notification(.init(id: firstID, kind: .show, title: "allowed")))
+    second.publish(
+      .notification(
+        .init(id: .init(session: "second", identifier: "same"), kind: .show, title: "suppressed")))
+    await signal.wait { received.withLock { $0.count == 1 } }
+    state.mutate { $0 = 1 }
+    await signal.wait { received.withLock { $0.count == 2 } }
+    #expect(received.withLock { $0.map(\.kind) } == [.show, .close])
+    #expect(received.withLock { $0.allSatisfy { $0.id == firstID } })
+    input.finish()
+    _ = try await task.value
+  }
+
   @Test("TerminalView forwards child clipboard requests to the host clipboard action")
   func forwardsChildClipboardRequests() async throws {
     let session = EventingTerminalSession(grid: ForeignGrid.empty)
@@ -229,6 +320,10 @@ private final class EventingTerminalSession: TerminalSession, Sendable {
     }
   }
 
+  func setGrid(_ grid: ForeignGrid) {
+    state.withLock { $0.snapshot = grid }
+  }
+
   func publish(
     _ event: TerminalEmulatorEvent
   ) {
@@ -244,6 +339,17 @@ private final class ClipboardTerminalHost: PresentationSurface,
   let capabilityProfile: TerminalCapabilityProfile = .previewUnicode
   let appearance: TerminalAppearance = .fallback
   private let clipboardWritesStorage = Mutex<[String]>([])
+  private let frameStorage = Mutex("")
+  let frameSignal = ConditionSignal()
+  var text: String { frameStorage.withLock { $0 } }
+
+  func present(_ surface: RasterSurface) throws -> TerminalPresentationMetrics {
+    frameStorage.withLock {
+      $0 = surface.cells.map { String($0.map(\.character)) }.joined(separator: "\n")
+    }
+    frameSignal.notify()
+    return TerminalPresentationMetrics(linesTouched: surface.size.height)
+  }
 
   /// Notified after every clipboard write, so a test can await a clipboard
   /// condition poll-free instead of polling `clipboardWrites`.

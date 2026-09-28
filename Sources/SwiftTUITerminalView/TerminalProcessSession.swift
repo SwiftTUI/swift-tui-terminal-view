@@ -14,7 +14,8 @@ public final class TerminalProcessSession: TerminalSession {
     arguments: [String] = [],
     environment: [String: String]? = nil,
     workingDirectory: String? = nil,
-    initialSize: CellSize
+    initialSize: CellSize,
+    scrollbackLimit: Int = 2_000
   ) {
     self.pty = ChildProcessPty(
       executable: command,
@@ -23,7 +24,7 @@ public final class TerminalProcessSession: TerminalSession {
       workingDirectory: workingDirectory,
       initialSize: initialSize
     )
-    self.emulator = TerminalEmulator(size: initialSize)
+    self.emulator = TerminalEmulator(size: initialSize, scrollbackLimit: scrollbackLimit)
     self.state = TerminalProcessSessionStateStore(
       cachedSnapshot: Self.emptyGrid(size: initialSize)
     )
@@ -31,6 +32,18 @@ public final class TerminalProcessSession: TerminalSession {
 
   public var cachedSnapshot: ForeignGrid {
     state.cachedSnapshot
+  }
+
+  public var cachedTerminalSnapshot: TerminalSnapshot { state.cachedTerminalSnapshot }
+
+  public func scroll(by lines: Int) async {
+    await emulator.scroll(by: lines)
+    _ = await snapshot()
+  }
+
+  public func resumeFollowingOutput() async {
+    await emulator.resumeFollowingOutput()
+    _ = await snapshot()
   }
 
   public func start() async throws {
@@ -54,11 +67,25 @@ public final class TerminalProcessSession: TerminalSession {
     }
 
     let task = Task { [pty, emulator, state, eventBroadcaster] in
+      // The PTY consumer never waits for frame cadence. A single pending signal
+      // coalesces snapshots, while every byte and ordered metadata event is kept.
+      let (updates, updateContinuation) = AsyncStream<Void>.makeStream(
+        bufferingPolicy: .bufferingNewest(1)
+      )
+      let publication = Task {
+        for await _ in updates {
+          let frame = await emulator.captureSnapshot()
+          if state.setCachedSnapshot(frame) {
+            eventBroadcaster.publish(.contentChanged)
+          }
+          try? await Task.sleep(for: .milliseconds(16))
+        }
+      }
       let stream = await pair.read()
       for await chunk in stream {
         let events = await emulator.feed(chunk)
-        let snapshot = await emulator.snapshot()
-        state.update(snapshot: snapshot, events: events)
+        state.apply(events: events)
+        updateContinuation.yield(())
         for event in events {
           eventBroadcaster.publish(event)
           if case .clientReply(let replyBytes) = event {
@@ -67,6 +94,8 @@ public final class TerminalProcessSession: TerminalSession {
         }
       }
 
+      updateContinuation.finish()
+      await publication.value
       let exitStatus = await pty.waitForExit()
       state.markExited(reason: Self.reason(from: exitStatus))
       eventBroadcaster.finish()
@@ -76,9 +105,11 @@ public final class TerminalProcessSession: TerminalSession {
   }
 
   public func snapshot() async -> ForeignGrid {
-    let snapshot = await emulator.snapshot()
-    state.setCachedSnapshot(snapshot)
-    return snapshot
+    let snapshot = await emulator.captureSnapshot()
+    if state.setCachedSnapshot(snapshot) {
+      eventBroadcaster.publish(.contentChanged)
+    }
+    return snapshot.grid
   }
 
   public func currentTitle() async -> String? {
@@ -141,10 +172,8 @@ public final class TerminalProcessSession: TerminalSession {
 
     try await pair.resize(size)
     await emulator.resize(size)
-    let snapshot = await emulator.snapshot()
-    let event = TerminalEmulatorEvent.sizeReported(size)
-    state.update(snapshot: snapshot, events: [event])
-    eventBroadcaster.publish(event)
+    _ = await snapshot()
+    eventBroadcaster.publish(.sizeReported(size))
   }
 
   public func events() -> AsyncStream<TerminalEmulatorEvent> {
@@ -180,6 +209,12 @@ private final class TerminalProcessSessionStateStore: Sendable {
 
   var cachedSnapshot: ForeignGrid {
     storage.withLock { $0.cachedSnapshot }
+  }
+
+  var cachedTerminalSnapshot: TerminalSnapshot {
+    storage.withLock {
+      $0.terminalSnapshot ?? TerminalSnapshot(generation: 0, grid: $0.cachedSnapshot)
+    }
   }
 
   var title: String? {
@@ -231,15 +266,27 @@ private final class TerminalProcessSessionStateStore: Sendable {
     storage.withLock { $0.pumpTask = task }
   }
 
-  func setCachedSnapshot(_ snapshot: ForeignGrid) {
-    storage.withLock { $0.cachedSnapshot = snapshot }
+  @discardableResult
+  func setCachedSnapshot(_ snapshot: TerminalSnapshot) -> Bool {
+    storage.withLock { state in
+      guard snapshot.generation >= state.snapshotGeneration else { return false }
+      state.snapshotGeneration = snapshot.generation
+      let previous = state.terminalSnapshot
+      state.terminalSnapshot = snapshot
+      let changed =
+        state.cachedSnapshot != snapshot.grid
+        || previous?.firstRow != snapshot.firstRow || previous?.epoch != snapshot.epoch
+        || previous?.isFollowingOutput != snapshot.isFollowingOutput
+        || previous?.mouseTracking != snapshot.mouseTracking
+        || previous?.graphics != snapshot.graphics
+      state.cachedSnapshot = snapshot.grid
+      guard changed else { return false }
+      return true
+    }
   }
 
-  func update(snapshot: ForeignGrid, events: [TerminalEmulatorEvent]) {
-    storage.withLock { state in
-      state.cachedSnapshot = snapshot
-      state.apply(events: events)
-    }
+  func apply(events: [TerminalEmulatorEvent]) {
+    storage.withLock { $0.apply(events: events) }
   }
 }
 
@@ -254,6 +301,8 @@ private struct TerminalProcessSessionState: Sendable {
   var title: String?
   var workingDirectory: String?
   var cachedSnapshot: ForeignGrid
+  var snapshotGeneration: UInt64 = 0
+  var terminalSnapshot: TerminalSnapshot?
   var pumpTask: Task<Void, Never>?
 
   mutating func apply(events: [TerminalEmulatorEvent]) {
