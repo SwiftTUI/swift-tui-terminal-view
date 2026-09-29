@@ -31,9 +31,9 @@ struct EmulatorWrapperTests {
   }
 
   @Test("OSC 133 shell integration markers are ignored quietly")
-  func osc133MarkersAreIgnoredQuietly() async {
+  func osc133MarkersAreIgnoredQuietly() async throws {
     let emulator = TerminalEmulator(size: CellSize(width: 4, height: 2))
-    let output = await captureStandardOutput {
+    let output = try await captureStandardOutput {
       _ = await emulator.feed(Array("\u{1B}]133;A\u{07}".utf8))
     }
 
@@ -126,20 +126,26 @@ struct EmulatorWrapperTests {
 
 private func captureStandardOutput(
   _ operation: () async -> Void
-) async -> String {
+) async throws -> String {
+  // A regular file cannot fill like an undrained pipe or wait for EOF from an
+  // inherited child descriptor. The native gate also serializes tests because
+  // stdout is process-wide, even when this suite itself is serialized.
+  let url = FileManager.default.temporaryDirectory
+    .appendingPathComponent("terminal-view-stdout-\(UUID().uuidString)")
+  try Data().write(to: url)
+  defer { try? FileManager.default.removeItem(at: url) }
+  let capture = try FileHandle(forWritingTo: url)
   fflush(nil)
-
-  let pipe = Pipe()
   let original = dup(STDOUT_FILENO)
-  dup2(pipe.fileHandleForWriting.fileDescriptor, STDOUT_FILENO)
-
+  guard original >= 0 else { throw POSIXError(.EBADF) }
+  defer {
+    fflush(nil)
+    dup2(original, STDOUT_FILENO)
+    close(original)
+    try? capture.close()
+  }
+  guard dup2(capture.fileDescriptor, STDOUT_FILENO) >= 0 else { throw POSIXError(.EBADF) }
   await operation()
-
   fflush(nil)
-  dup2(original, STDOUT_FILENO)
-  close(original)
-  pipe.fileHandleForWriting.closeFile()
-
-  let data = pipe.fileHandleForReading.readDataToEndOfFile()
-  return String(decoding: data, as: UTF8.self)
+  return String(decoding: try Data(contentsOf: url), as: UTF8.self)
 }

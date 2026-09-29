@@ -26,6 +26,8 @@ run_swift() {
   fi
 }
 
-run_swift test
+# Tests include process-wide stdout capture alongside real PTY subprocesses.
+# A suite-local .serialized trait does not serialize unrelated suites.
+run_swift test --no-parallel
 
 Scripts/check_public_api_baseline.sh
