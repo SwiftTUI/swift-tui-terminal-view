@@ -35,3 +35,15 @@ the embedding package never posts desktop notifications itself.
 
 See [Terminal Embedding](../Sources/SwiftTUITerminalView/SwiftTUITerminalView.docc/TerminalEmbedding.md)
 for the protocol subsets, limits, viewport behavior and lifecycle rules.
+
+`SWIFTTUI_PTY_DIAGNOSTICS`, when set to an existing writable directory before
+session creation, adds per-session `session-<UUID>.tsv` metadata traces. Events
+record the slave path for correlation, input write start/end, pump read size,
+emulation start/end, snapshot start/end and publication using monotonic
+nanoseconds. Tracing records no payloads and writes synchronously to avoid an
+additional diagnostic backlog. Leave it unset for acceptance timing. Framework
+versions with bounded PTY reads additionally emit queue traces into the same
+directory; the published tagged dependency determines that framework behavior.
+The session consumes each chunk through emulation and ordered replies before
+requesting the next one. Its one pending snapshot signal is separate from the
+framework's byte queue and does not itself provide byte backpressure.

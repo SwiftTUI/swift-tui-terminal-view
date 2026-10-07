@@ -8,6 +8,7 @@ public final class TerminalProcessSession: TerminalSession {
   private let emulator: TerminalEmulator
   private let state: TerminalProcessSessionStateStore
   private let eventBroadcaster = TerminalEventBroadcaster()
+  private let trace = TerminalSessionTrace()
 
   public init(
     command: String,
@@ -66,24 +67,35 @@ public final class TerminalProcessSession: TerminalSession {
       return
     }
 
-    let task = Task { [pty, emulator, state, eventBroadcaster] in
+    if let trace {
+      let slavePath = await pair.slavePath
+      trace.record("slave:\(slavePath)")
+    }
+    let task = Task { [pty, emulator, state, eventBroadcaster, trace] in
       // The PTY consumer never waits for frame cadence. A single pending signal
-      // coalesces snapshots, while every byte and ordered metadata event is kept.
+      // coalesces snapshots. The pair applies lossless byte backpressure while
+      // feed/replies are busy; the snapshot slot is not a raw-byte queue.
       let (updates, updateContinuation) = AsyncStream<Void>.makeStream(
         bufferingPolicy: .bufferingNewest(1)
       )
       let publication = Task {
         for await _ in updates {
+          trace?.record("snapshotStart")
           let frame = await emulator.captureSnapshot()
+          trace?.record("snapshotEnd")
           if state.setCachedSnapshot(frame) {
             eventBroadcaster.publish(.contentChanged)
+            trace?.record("publication")
           }
           try? await Task.sleep(for: .milliseconds(16))
         }
       }
       let stream = await pair.read()
       for await chunk in stream {
+        trace?.record("read", bytes: chunk.count)
+        trace?.record("emulationStart", bytes: chunk.count)
         let events = await emulator.feed(chunk)
+        trace?.record("emulationEnd", bytes: chunk.count)
         state.apply(events: events)
         updateContinuation.yield(())
         for event in events {
@@ -105,9 +117,12 @@ public final class TerminalProcessSession: TerminalSession {
   }
 
   public func snapshot() async -> ForeignGrid {
+    trace?.record("snapshotStart")
     let snapshot = await emulator.captureSnapshot()
+    trace?.record("snapshotEnd")
     if state.setCachedSnapshot(snapshot) {
       eventBroadcaster.publish(.contentChanged)
+      trace?.record("publication")
     }
     return snapshot.grid
   }
@@ -146,7 +161,9 @@ public final class TerminalProcessSession: TerminalSession {
     guard !bytes.isEmpty, let pair = await pty.pair else {
       return
     }
+    trace?.record("inputWriteStart", bytes: bytes.count)
     try? await pair.write(bytes)
+    trace?.record("inputWriteEnd", bytes: bytes.count)
   }
 
   public func send(paste: String) async {
@@ -154,7 +171,9 @@ public final class TerminalProcessSession: TerminalSession {
     guard !bytes.isEmpty, let pair = await pty.pair else {
       return
     }
+    trace?.record("inputWriteStart", bytes: bytes.count)
     try? await pair.write(bytes)
+    trace?.record("inputWriteEnd", bytes: bytes.count)
   }
 
   public func send(mouse: TerminalEmulatorMouse) async {
@@ -162,7 +181,9 @@ public final class TerminalProcessSession: TerminalSession {
     guard !bytes.isEmpty, let pair = await pty.pair else {
       return
     }
+    trace?.record("inputWriteStart", bytes: bytes.count)
     try? await pair.write(bytes)
+    trace?.record("inputWriteEnd", bytes: bytes.count)
   }
 
   public func resize(_ size: CellSize) async throws {
