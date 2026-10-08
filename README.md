@@ -1,6 +1,6 @@
 # SwiftTUI Terminal View
 
-[![SwiftTUI](https://img.shields.io/badge/status-0.15.1%20pre--release-DAA520)](https://github.com/SwiftTUI/swift-tui)
+[![SwiftTUI](https://img.shields.io/badge/status-0.16.0%20pre--release-DAA520)](https://github.com/SwiftTUI/swift-tui)
 
 Embed terminal programs inside SwiftTUI views. `SwiftTUITerminalView` provides
 `TerminalView`, `TerminalProcessSession`, the `TerminalSession` protocol, and
@@ -10,8 +10,8 @@ WASI are not supported.
 ## Install
 
 ```swift
-.package(url: "https://github.com/SwiftTUI/swift-tui.git", exact: "0.15.1"),
-.package(url: "https://github.com/SwiftTUI/swift-tui-terminal-view.git", exact: "0.15.1"),
+.package(url: "https://github.com/SwiftTUI/swift-tui.git", exact: "0.16.0"),
+.package(url: "https://github.com/SwiftTUI/swift-tui-terminal-view.git", exact: "0.16.0"),
 ```
 
 Add `.product(name: "SwiftTUITerminalView", package: "swift-tui-terminal-view")`
@@ -43,10 +43,9 @@ which this module re-exports alongside `SwiftTUIRuntime` and emulation.
 
 ## Current source capabilities
 
-HEAD adds immutable content publication, negotiated Kitty keyboard input,
+Release 0.16.0 adds immutable content publication, negotiated Kitty keyboard input,
 visible selection/copy, bounded scrollback, pane-owned Sixel and Kitty image
-subsets, and host-controlled OSC 99 requests. The install snippet above uses
-the published 0.15.1 package; these additions require a later release.
+subsets, and host-controlled OSC 99 requests.
 See [Terminal Embedding](Sources/SwiftTUITerminalView/SwiftTUITerminalView.docc/TerminalEmbedding.md)
 for input bindings, protocol subsets, limits and custom-session integration.
 
