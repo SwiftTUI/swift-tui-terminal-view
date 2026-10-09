@@ -60,6 +60,7 @@ private struct TerminalViewContent<Session: TerminalSession, Focus: Hashable>: V
   @FocusState private var localFocus: Bool
   @State private var updateGeneration: UInt64 = 0
   @State private var selection: TerminalTextSelection?
+  @State private var paneTitle = "Terminal"
 
   let session: Session
   let keyRouting: @MainActor @Sendable (KeyPress) -> TerminalViewKeyDisposition
@@ -103,6 +104,13 @@ private struct TerminalViewContent<Session: TerminalSession, Focus: Hashable>: V
           Task { await session.scroll(by: wheel.deltaY) }
           return .handled
         }
+        .accessibilityRepresentation {
+          TerminalPaneReview(
+            session: session, frame: frame, title: paneTitle,
+            clipboard: clipboard, handlers: handlers
+          )
+          .id(ObjectIdentifier(session))
+        }
       }
     }
   }
@@ -143,6 +151,7 @@ private struct TerminalViewContent<Session: TerminalSession, Focus: Hashable>: V
           let events = session.events()
           try? await session.start()
           try? await session.resize(proxy.size)
+          paneTitle = await session.currentTitle() ?? "Terminal"
           for await event in events {
             updateGeneration &+= 1
             if let selection, selection.snapshot.epoch != session.cachedTerminalSnapshot.epoch {
@@ -157,6 +166,7 @@ private struct TerminalViewContent<Session: TerminalSession, Focus: Hashable>: V
               }
               handlers.notification?(notification)
             case .titleChanged(let title):
+              paneTitle = title
               onTitleChange?(title)
               handlers.titleChanged?(title)
             case .workingDirectoryChanged(let directory):

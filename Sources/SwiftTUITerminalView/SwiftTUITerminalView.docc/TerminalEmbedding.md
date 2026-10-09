@@ -181,6 +181,28 @@ provides X10/1000/1002/SGR encoding for hosts that route child pointer input.
 `TerminalView` does not itself forward pointer events to the child. A pointer
 press can focus its pane; wheel history requires that pane already be focused.
 
+## Semantic pane review
+
+The default accessibility representation names the pane and child title,
+reports the live logical caret, and supplies bounded Unicode output review.
+Freeze output review keeps a stable copy during child updates. Earlier output,
+Later output and Follow latest output navigate retained normal-buffer history;
+Copy reviewed output reports the host clipboard result. Buffer resets and
+history eviction are described without replacing a frozen review silently.
+
+Enter child line input offers a standard editable field, Hide input, a separate
+Send line to child action, and Leave child input. Sending uses paste followed by
+Return; leaving clears the draft and restores assistive focus to the pane title.
+Browser Tab can return to surrounding app controls. This line path does not
+infer a full-screen subprocess's widgets or password prompts. Hosts should
+provide that program's accessible line mode or an authored equivalent task path.
+The native keyboard interceptor and ordinary child Escape behavior are unchanged.
+
+Review removes control and bidi formatting characters and caps output at 16384
+Unicode scalars with an explicit truncation notice. It preserves soft wraps and
+wide-cell text. Real reader speech and clipboard permission remain host-level
+qualification responsibilities.
+
 ## Pane graphics
 
 Images are decoded into package-owned `TerminalGraphic` PNG values and composed

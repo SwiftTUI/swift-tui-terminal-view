@@ -162,7 +162,9 @@ public actor TerminalEmulator {
       firstRow: top, retainedRows: oldest...max(oldest, liveTop + terminal.rows - 1),
       epoch: epoch, buffer: terminal.isCurrentBufferAlternate ? .alternate : .normal,
       isFollowingOutput: viewportTop == nil, mouseTracking: terminal.mouseMode != .off,
-      graphics: graphics.snapshot(top: top, alternate: terminal.isCurrentBufferAlternate)
+      graphics: graphics.snapshot(top: top, alternate: terminal.isCurrentBufferAlternate),
+      caret: CellPoint(
+        x: terminal.getCursorLocation().x, y: liveTop + terminal.getCursorLocation().y)
     )
   }
 

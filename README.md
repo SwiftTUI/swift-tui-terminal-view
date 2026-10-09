@@ -43,6 +43,10 @@ which this module re-exports alongside `SwiftTUIRuntime` and emulation.
 
 ## Current source capabilities
 
+Terminal panes expose bounded text review, history, copy, logical caret and a
+standard line-input alternative through the shared accessibility API. See
+[Terminal pane access](docs/ACCESSIBILITY.md) for operation and subprocess limits.
+
 Release 0.16.0 adds immutable content publication, negotiated Kitty keyboard input,
 visible selection/copy, bounded scrollback, pane-owned Sixel and Kitty image
 subsets, and host-controlled OSC 99 requests.
