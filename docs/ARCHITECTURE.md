@@ -14,6 +14,10 @@ attach and entry-point tests also use them.
 It alone depends on SwiftTerm and translates terminal output into `ForeignGrid`
 and typed events, keys, and mouse input. No SwiftTerm type crosses its public API.
 Both targets consume public framework products, with no package-internal access.
+Events are ordered change notifications, not state records. `mouseModeChanged`
+combines independent tracking and encoding controls and is lossy, so hosts read
+tracking from `TerminalSnapshot.mouseTracking`; Terminal Embedding's Mouse
+reporting section lists what each value reports.
 
 The umbrella re-exports Runtime, PTYPrimitives, and Emulation. Tests use the
 existing public testing support product for view input and lifecycle checks;

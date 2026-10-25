@@ -176,12 +176,53 @@ switches return to live output and invalidate selection; resize uses the
 backend's normal text reflow.
 
 Child mouse reporting suppresses automatic drag selection and wheel history.
-Control-Shift-S explicitly overrides it for local selection. `send(mouse:)`
-provides X10/1000/1002/SGR encoding for hosts that route child pointer input.
-SGR-Pixels (1016) reports the top-left pixel of the event's cell in the 8×16
-virtual cell that pixel-size reports describe, counted from 0 at the pane's top
-left. `TerminalView` does not itself forward pointer events to the child. A pointer
-press can focus its pane; wheel history requires that pane already be focused.
+Control-Shift-S explicitly overrides it for local selection. `TerminalView` does
+not itself forward pointer events to the child; hosts that do should follow
+Mouse reporting below. A pointer press can focus its pane; wheel history
+requires that pane already be focused.
+
+## Mouse reporting
+
+A child controls mouse reporting with two independent families of XTerm private
+modes. Tracking (DECSET 9, 1000, 1002, 1003) selects which pointer events it
+receives; encoding (1005, 1006, 1015, 1016) selects how each report is written.
+`mouseModeChanged` events record these controls in input order. They are not a
+state record, and the most recent value can misstate the current mode:
+
+- Every tracking control publishes the resulting mode, including repeats: 9 →
+  `.x10`, 1000 and 1002 → `.button`, 1003 → `.anyEvent`. Resetting any tracking
+  mode turns tracking off and publishes `.disabled`, as does a terminal reset
+  (`ESC c`). The first feed after construction reports the initial `.disabled`.
+- Setting SGR (1006) or SGR-Pixels (1016) encoding publishes `.sgr`. Resetting
+  either publishes `.disabled`, although tracking continues.
+- UTF-8 (1005) and URXVT (1015) controls publish nothing. Selecting one after SGR
+  changes the encoding while the last value stays `.sgr`. Resetting any encoding
+  mode restores the default X10 encoding. A terminal reset keeps the encoding.
+- A control sequence with several parameters publishes its tracking values
+  first, then its encoding values: `ESC[?1006;1000h` publishes `.button`, `.sgr`.
+  Separate sequences publish in byte order, independently of read boundaries.
+
+The lossy transitions are therefore an encoding reset reported as `.disabled`,
+1000 and 1002 both reported as `.button`, 1016 reported like 1006, changes to
+1005 and 1015 not reported, and encoding values moved after tracking values
+within one sequence.
+
+To route pointer input, read whether the child is tracking from
+`TerminalSnapshot.mouseTracking`, which is exact at capture
+(`cachedTerminalSnapshot` for a session; `TerminalProcessSession` publishes
+`.contentChanged` when it changes). While it is true, the most recent `.x10`,
+`.button` or `.anyEvent` value is the tracking mode, because tracking starts only
+through a control that publishes one of them. Ignore `.sgr`, and do not treat
+`.disabled` alone as the end of tracking.
+
+`send(mouse:)` writes each packet in the child's current encoding, so hosts do
+not track encodings. SGR-Pixels (1016) reports the top-left pixel of the
+event's cell in the 8×16 virtual cell that pixel-size reports describe,
+counted from 0 at the pane's top left. `send(mouse:)` does not consult
+tracking, so the host should forward nothing while tracking is off, presses for
+`.x10`, presses and releases for `.button`, and presses, releases and all motion
+for `.anyEvent`. `.button` does not say whether the child also requested motion
+with a held button (1002).
 
 ## Semantic pane review
 

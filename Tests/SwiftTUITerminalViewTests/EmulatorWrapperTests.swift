@@ -275,6 +275,111 @@ struct EmulatorWrapperTests {
     _ = await tracking.feed(Array("\u{1B}[?1000h\u{1B}[?1006l".utf8))
     #expect(await tracking.captureSnapshot().mouseTracking)
   }
+
+  @Test("one control sequence publishes tracking values before encoding values")
+  func mouseModeOrderWithinOneSequence() async {
+    #expect(await mouseModes(after: "\u{1B}[?1006;1000h") == [.button, .sgr])
+    #expect(await mouseModes(after: "\u{1B}[?1006h\u{1B}[?1000h") == [.sgr, .button])
+    #expect(await mouseModes(after: "\u{1B}[?1016;1003h") == [.anyEvent, .sgr])
+    let emulator = await drainedEmulator()
+    _ = await emulator.feed(Array("\u{1B}[?1000h\u{1B}[?1006h".utf8))
+    let reset = await emulator.feed(Array("\u{1B}[?1006;1000l".utf8))
+    #expect(mouseModes(reset) == [.disabled, .disabled])
+    #expect(await emulator.captureSnapshot().mouseTracking == false)
+  }
+
+  @Test("encoding controls are independent of tracking and only 1006/1016 publish")
+  func encodingControlsAreIndependentOfTracking() async {
+    let reverted = await drainedEmulator()
+    let events = await reverted.feed(Array("\u{1B}[?1002h\u{1B}[?1006h\u{1B}[?1006l".utf8))
+    #expect(mouseModes(events) == [.button, .sgr, .disabled])
+    #expect(await reverted.captureSnapshot().mouseTracking)
+    #expect(await reverted.send(mouse: primaryPress) == x10PrimaryPress)
+
+    for control in ["\u{1B}[?1005h", "\u{1B}[?1015h", "\u{1B}[?1005l", "\u{1B}[?1015l"] {
+      #expect(await mouseModes(after: control).isEmpty, "\(control.dropFirst())")
+    }
+
+    let urxvt = await drainedEmulator()
+    #expect(mouseModes(await urxvt.feed(Array("\u{1B}[?1006h\u{1B}[?1015h".utf8))) == [.sgr])
+    #expect(await urxvt.send(mouse: primaryPress) == Array("\u{1B}[32;5;3M".utf8))
+
+    let utf8 = await drainedEmulator(width: 120)
+    #expect(mouseModes(await utf8.feed(Array("\u{1B}[?1006h\u{1B}[?1005h".utf8))) == [.sgr])
+    let wide = TerminalEmulatorMouse(kind: .down(.primary), cell: CellPoint(x: 100, y: 2))
+    #expect(await utf8.send(mouse: wide) == [27, 91, 77, 32, 0xC2, 0x85, 35])
+
+    let restored = await drainedEmulator()
+    #expect(mouseModes(await restored.feed(Array("\u{1B}[?1006h\u{1B}[?1015l".utf8))) == [.sgr])
+    #expect(await restored.send(mouse: primaryPress) == x10PrimaryPress)
+  }
+
+  @Test("tracking notifications record each control rather than a state change")
+  func trackingNotificationsRecordEachControl() async {
+    let constructed = TerminalEmulator(size: CellSize(width: 10, height: 3))
+    #expect(mouseModes(await constructed.feed([])) == [.disabled])
+    let levels: [(String, TerminalMouseMode)] = [
+      ("\u{1B}[?1000h", .button), ("\u{1B}[?1002h", .button), ("\u{1B}[?9h", .x10),
+    ]
+    for (control, mode) in levels {
+      let emulator = await drainedEmulator()
+      #expect(mouseModes(await emulator.feed(Array(control.utf8))) == [mode])
+      #expect(await emulator.captureSnapshot().mouseTracking)
+    }
+    #expect(await mouseModes(after: "\u{1B}[?1000h\u{1B}[?1000h") == [.button, .button])
+    #expect(await mouseModes(after: "\u{1B}[?1003l") == [.disabled])
+    let exclusive = await drainedEmulator()
+    let events = await exclusive.feed(Array("\u{1B}[?1000h\u{1B}[?1003l".utf8))
+    #expect(mouseModes(events) == [.button, .disabled])
+    #expect(await exclusive.captureSnapshot().mouseTracking == false)
+
+    let reset = await drainedEmulator()
+    _ = await reset.feed(Array("\u{1B}[?1003h\u{1B}[?1006h".utf8))
+    #expect(mouseModes(await reset.feed(Array("\u{1B}c".utf8))) == [.disabled])
+    #expect(await reset.captureSnapshot().mouseTracking == false)
+    #expect(mouseModes(await reset.feed(Array("\u{1B}[?1000h".utf8))) == [.button])
+    #expect(await reset.send(mouse: primaryPress) == Array("\u{1B}[<0;5;3M".utf8))
+  }
+
+  @Test("the documented fold recovers the tracking state that the last event misstates")
+  func mouseStateFoldRecoversTrackingLevel() async {
+    let emulator = await drainedEmulator()
+    #expect(await emulator.captureSnapshot().mouseTracking == false)
+    #expect(await emulator.send(mouse: primaryPress) == x10PrimaryPress)
+
+    let steps: [(control: String, state: TerminalMouseMode, lastEventAgrees: Bool)] = [
+      ("\u{1B}[?1003h", .anyEvent, true),
+      ("\u{1B}[?1006h", .anyEvent, false),
+      ("\u{1B}[?1006l", .anyEvent, false),
+      ("\u{1B}[?1000l", .disabled, true),
+      ("\u{1B}[?1006h", .disabled, false),
+      ("\u{1B}[?9h", .x10, true),
+      ("\u{1B}[?1016h", .x10, false),
+      ("\u{1B}[?1016l", .x10, false),
+      ("\u{1B}c", .disabled, true),
+      ("\u{1B}[?1002h", .button, true),
+      ("\u{1B}[?1015h", .button, true),
+    ]
+    var level = TerminalMouseMode.disabled
+    var lastEvent: TerminalMouseMode?
+    for step in steps {
+      for mode in mouseModes(await emulator.feed(Array(step.control.utf8))) {
+        lastEvent = mode
+        if mode == .x10 || mode == .button || mode == .anyEvent { level = mode }
+      }
+      let state = await emulator.captureSnapshot().mouseTracking ? level : .disabled
+      #expect(state == step.state, "\(step.control.dropFirst())")
+      #expect((lastEvent == step.state) == step.lastEventAgrees, "\(step.control.dropFirst())")
+    }
+  }
+}
+
+private let primaryPress = TerminalEmulatorMouse(kind: .down(.primary), cell: CellPoint(x: 4, y: 2))
+/// `primaryPress` in the default X10 encoding: CSI M, then button and 1-based ordinates plus 32.
+private let x10PrimaryPress: [UInt8] = [27, 91, 77, 32, 37, 35]
+
+private func mouseModes(after text: String) async -> [TerminalMouseMode] {
+  mouseModes(await drainedEmulator().feed(Array(text.utf8)))
 }
 
 private func firstCell(after prefix: String) async -> RasterCell {
@@ -285,8 +390,8 @@ private func firstCell(after prefix: String) async -> RasterCell {
 
 /// SwiftTerm announces its initial (disabled) mouse mode during construction;
 /// the first feed drains that notification. Start from a drained emulator.
-private func drainedEmulator() async -> TerminalEmulator {
-  let emulator = TerminalEmulator(size: CellSize(width: 10, height: 3))
+private func drainedEmulator(width: Int = 10) async -> TerminalEmulator {
+  let emulator = TerminalEmulator(size: CellSize(width: width, height: 3))
   _ = await emulator.feed([])
   return emulator
 }

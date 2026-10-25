@@ -29,6 +29,29 @@ struct ContentPublicationTests {
     #expect(await session.currentLifecycle() == .exited(reason: .normal(code: 0)))
   }
 
+  @Test("a mouse-tracking change alone publishes a content change")
+  func mouseTrackingChangesPublish() async throws {
+    let script =
+      "printf READY; read a; printf '\\033[?1000h'; read b; printf '\\033[?1000l'; read c"
+    let session = TerminalProcessSession(
+      command: "/bin/sh", arguments: ["-c", script], initialSize: CellSize(width: 20, height: 6)
+    )
+    let events = session.events()
+    try await session.start()
+    var observed: [Bool] = []
+    for await event in events {
+      guard event == .contentChanged else { continue }
+      let snapshot = session.cachedTerminalSnapshot
+      let text = snapshot.grid.cells.map { String($0.map(\.character)) }.joined()
+      guard text.contains("READY"), observed.last != snapshot.mouseTracking else { continue }
+      // Each step waits on the child's read, so every tracking state is observed once.
+      observed.append(snapshot.mouseTracking)
+      await session.send(paste: "\n")
+    }
+    #expect(observed == [false, true, false])
+    #expect(await session.currentLifecycle() == .exited(reason: .normal(code: 0)))
+  }
+
   @Test("retained payloads keep the exact frame captured by the view")
   func immutablePayload() {
     var grid = ForeignGrid(
