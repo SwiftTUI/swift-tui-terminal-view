@@ -29,7 +29,9 @@ public actor TerminalEmulator {
     for chunk in framer.feed(bytes) {
       let previousBuffer = ObjectIdentifier(terminal.buffer)
       switch chunk {
-      case .terminal(let bytes): terminal.feed(byteArray: bytes)
+      case .terminal(let bytes):
+        terminal.feed(byteArray: bytes)
+        for event in Self.mouseEncodingEvents(in: bytes) { delegate.record(event) }
       case .erase(let bytes):
         graphics.clear(alternate: terminal.isCurrentBufferAlternate)
         terminal.feed(byteArray: bytes)
@@ -84,9 +86,7 @@ public actor TerminalEmulator {
     graphics.evict(
       before: terminal.buffer.totalLinesTrimmed, alternate: terminal.isCurrentBufferAlternate)
     generation &+= 1
-    var events = delegate.drainEvents()
-    events.append(contentsOf: Self.mouseProtocolEvents(in: bytes))
-    return events
+    return delegate.drainEvents()
   }
 
   public func snapshot() -> ForeignGrid {
@@ -296,19 +296,21 @@ public actor TerminalEmulator {
     return .wheelDown
   }
 
-  private static func mouseProtocolEvents(in bytes: [UInt8]) -> [TerminalEmulatorEvent] {
-    guard let text = String(bytes: bytes, encoding: .utf8) else {
-      return []
+  /// The backend notifies tracking changes but not its SGR encoding. The framer delivers
+  /// each complete control sequence as one chunk, so derive encoding changes from a
+  /// DECSET/DECRST sequence, in parameter order, after the backend's notifications for
+  /// that sequence. Transport chunk boundaries cannot change what is published.
+  private static func mouseEncodingEvents(in sequence: [UInt8]) -> [TerminalEmulatorEvent] {
+    guard sequence.count >= 5, sequence[0] == 27, sequence[1] == 91, sequence[2] == 63,
+      let final = sequence.last, final == 104 || final == 108
+    else { return [] }
+    let parameters = sequence[3..<(sequence.count - 1)]
+    guard parameters.allSatisfy({ (48...57).contains($0) || $0 == 59 }) else { return [] }
+    return parameters.split(separator: 59).compactMap { parameter in
+      guard let mode = Int(String(decoding: parameter, as: UTF8.self)), mode == 1006 || mode == 1016
+      else { return nil }
+      return .mouseModeChanged(final == 104 ? .sgr : .disabled)
     }
-
-    var events: [TerminalEmulatorEvent] = []
-    if text.contains("\u{1B}[?1006h") || text.contains("\u{1B}[?1016h") {
-      events.append(.mouseModeChanged(.sgr))
-    }
-    if text.contains("\u{1B}[?1006l") || text.contains("\u{1B}[?1016l") {
-      events.append(.mouseModeChanged(.disabled))
-    }
-    return events
   }
 
   private static func rasterCell(
@@ -327,8 +329,16 @@ public actor TerminalEmulator {
       character: character,
       spanWidth: max(1, Int(charData.width)),
       style: style?.isDefault == true ? nil : style,
-      hyperlink: charData.getPayload() as? String
+      hyperlink: (charData.getPayload() as? String).flatMap(hyperlinkDestination(from:))
     )
+  }
+
+  /// The backend stores the OSC 8 text after `8;`, which is `params;URI`. The
+  /// destination is the URI alone; an empty URI ends the link.
+  private static func hyperlinkDestination(from payload: String) -> String? {
+    guard let separator = payload.firstIndex(of: ";") else { return nil }
+    let destination = payload[payload.index(after: separator)...]
+    return destination.isEmpty ? nil : String(destination)
   }
 
   private static func isEmptyCellCharacter(_ character: Character) -> Bool {
@@ -339,17 +349,29 @@ public actor TerminalEmulator {
   private static func rasterStyle(from attribute: Attribute) -> ResolvedTextStyle? {
     var foregroundColor = color(from: attribute.fg)
     var backgroundColor = color(from: attribute.bg)
+    var emphasis = TextStyle.TextEmphasis()
 
     if attribute.style.contains(.inverse) {
-      swap(&foregroundColor, &backgroundColor)
+      // Swapping is exact only for two concrete colors. A default color cannot
+      // be named in the opposite role, so keep reverse video as an attribute.
+      if foregroundColor != nil, backgroundColor != nil {
+        swap(&foregroundColor, &backgroundColor)
+      } else {
+        emphasis.insert(.reverse)
+      }
     }
 
-    var emphasis = TextStyle.TextEmphasis()
     if attribute.style.contains(.bold) {
       emphasis.insert(.bold)
     }
+    if attribute.style.contains(.dim) {
+      emphasis.insert(.faint)
+    }
     if attribute.style.contains(.italic) {
       emphasis.insert(.italic)
+    }
+    if attribute.style.contains(.blink) {
+      emphasis.insert(.blink)
     }
 
     let underlineStyle: TextLineStyle? =
@@ -517,6 +539,12 @@ private final class EmulatorDelegate: TerminalDelegate {
 
   func clipboardCopy(source: Terminal, content: Data) {
     events.append(.clipboardWriteRequested(Array(content)))
+  }
+
+  /// Pixel reports (`CSI 14 t`, `CSI 16 t`) describe the virtual cell that sizes
+  /// pixel-dimensioned graphics, so a child's image fills the cells it intends.
+  func cellSizeInPixels(source: Terminal) -> (width: Int, height: Int)? {
+    (TerminalGraphicsStore.virtualCell.width, TerminalGraphicsStore.virtualCell.height)
   }
 
   private static func mouseMode(from mode: Terminal.MouseMode) -> TerminalMouseMode {

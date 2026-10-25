@@ -158,29 +158,23 @@ struct CampaignT1InputTests {
       #expect(expected.contains(.mouseModeChanged(.sgr)))
       var events: [TerminalEmulatorEvent] = []
       for byte in Array("\u{1B}[?1006h".utf8) { events += await emulator.feed([byte]) }
-      t1Known("STUI-1179: mouse-mode publication depends on chunk boundaries") {
-        #expect(
-          events.filter { if case .mouseModeChanged = $0 { true } else { false } }
-            == expected.filter { if case .mouseModeChanged = $0 { true } else { false } })
-      }
+      #expect(
+        events.filter { if case .mouseModeChanged = $0 { true } else { false } }
+          == expected.filter { if case .mouseModeChanged = $0 { true } else { false } })
     case 59:
       _ = await emulator.feed(Array("\u{1B}[?1006h".utf8))
       let events = await emulator.feed(Array("\u{1B}[?1006l\u{1B}[?1006h".utf8))
-      t1Known("STUI-1179: final mouse-mode notification contradicts the enabled protocol") {
-        #expect(
-          events.last { if case .mouseModeChanged = $0 { true } else { false } }
-            == .mouseModeChanged(.sgr))
-      }
+      #expect(
+        events.last { if case .mouseModeChanged = $0 { true } else { false } }
+          == .mouseModeChanged(.sgr))
       #expect(
         await emulator.send(mouse: .init(kind: .down(.primary), cell: .zero))
           == Array("\u{1B}[<0;1;1M".utf8))
     default:
       let events = await emulator.feed(Array("\u{1B}[?1006h\u{1B}[?1006l\u{1B}[?1006h".utf8))
-      t1Known("STUI-1179: final mouse-mode notification contradicts the enabled protocol") {
-        #expect(
-          events.last { if case .mouseModeChanged = $0 { true } else { false } }
-            == .mouseModeChanged(.sgr))
-      }
+      #expect(
+        events.last { if case .mouseModeChanged = $0 { true } else { false } }
+          == .mouseModeChanged(.sgr))
       #expect(
         await emulator.send(mouse: .init(kind: .down(.primary), cell: .zero))
           == Array("\u{1B}[<0;1;1M".utf8))

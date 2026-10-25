@@ -213,7 +213,8 @@ Equal child IDs in different sessions receive distinct render identities.
 
 Sixel reuses SwiftTerm's bitmap decoder after bounded validation. RGB/HLS
 palettes, repeats, and transparent pixels are supported. Placement begins at the
-child cursor; a virtual 8×16 pixel cell determines its cell extent. The cursor
+child cursor; a virtual 8×16 pixel cell determines its cell extent. Pixel-size
+reports (`CSI 14 t`, `CSI 16 t`) describe the same cell. The cursor
 stays in place. Raster hints are validated but do not scale the bitmap. The
 accepted payload is at most 1 MiB, each dimension at most 1,024 pixels, palettes
 at most 256 entries, and cumulative column work at most 2,097,152 operations.

@@ -122,6 +122,116 @@ struct EmulatorWrapperTests {
     let cell = (await emulator.snapshot()).cells[0][0]
     #expect(cell.style?.foregroundColor == .red)
   }
+
+  @Test("SGR faint and blink survive cell conversion")
+  func faintAndBlinkSurviveConversion() async {
+    let cases: [(String, ResolvedTextStyle?)] = [
+      ("\u{1B}[2m", ResolvedTextStyle(emphasis: .faint)),
+      ("\u{1B}[5m", ResolvedTextStyle(emphasis: .blink)),
+      ("\u{1B}[1;2m", ResolvedTextStyle(emphasis: [.bold, .faint])),
+      ("\u{1B}[3;5m", ResolvedTextStyle(emphasis: [.italic, .blink])),
+      ("\u{1B}[2;5m\u{1B}[22;25m", nil),
+    ]
+    for (prefix, expected) in cases {
+      #expect(await firstCell(after: prefix).style == expected, "\(prefix.debugDescription)")
+    }
+  }
+
+  @Test("reverse video survives default terminal colors")
+  func reverseVideoSurvivesDefaultColors() async {
+    let cases: [(String, ResolvedTextStyle?)] = [
+      ("\u{1B}[7m", ResolvedTextStyle(emphasis: .reverse)),
+      ("\u{1B}[31;7m", ResolvedTextStyle(foregroundColor: .red, emphasis: .reverse)),
+      ("\u{1B}[42;7m", ResolvedTextStyle(backgroundColor: .green, emphasis: .reverse)),
+      // Two concrete colors remain represented by their exact swap.
+      ("\u{1B}[31;42;7m", ResolvedTextStyle(foregroundColor: .green, backgroundColor: .red)),
+      ("\u{1B}[1;7m", ResolvedTextStyle(emphasis: [.bold, .reverse])),
+      ("\u{1B}[7m\u{1B}[27m", nil),
+    ]
+    for (prefix, expected) in cases {
+      #expect(await firstCell(after: prefix).style == expected, "\(prefix.debugDescription)")
+    }
+  }
+
+  @Test("OSC 8 cells carry only the URI destination")
+  func hyperlinkCellsCarryOnlyTheURI() async {
+    let url = "https://example.com/a"
+    func links(_ text: String) async -> [String?] {
+      let emulator = TerminalEmulator(size: CellSize(width: 6, height: 1))
+      _ = await emulator.feed(Array(text.utf8))
+      return (await emulator.snapshot()).cells[0].prefix(4).map(\.hyperlink)
+    }
+    #expect(await links("\u{1B}]8;;\(url)\u{1B}\\abc\u{1B}]8;;\u{1B}\\d") == [url, url, url, nil])
+    #expect(await links("\u{1B}]8;id=x1;\(url)\u{1B}\\X") == [url, nil, nil, nil])
+    #expect(await links("\u{1B}]8;;\(url);b\u{07}X") == ["\(url);b", nil, nil, nil])
+    #expect(
+      await links("\u{1B}]8;;\(url)\u{1B}\\A\u{1B}]8;id=x1;\u{1B}\\B") == [url, nil, nil, nil])
+  }
+
+  @Test("pixel-size reports describe the virtual graphics cell")
+  func pixelReportsDescribeTheGraphicsCell() async {
+    let emulator = TerminalEmulator(size: CellSize(width: 10, height: 3))
+    let cell = await emulator.feed(Array("\u{1B}[16t".utf8))
+    let area = await emulator.feed(Array("\u{1B}[14t".utf8))
+    #expect(cell.contains(.clientReply(Array("\u{1B}[6;16;8t".utf8))))
+    #expect(area.contains(.clientReply(Array("\u{1B}[4;48;80t".utf8))))
+  }
+
+  @Test("mouse-mode events follow control order independently of chunking")
+  func mouseModeEventsFollowControlOrder() async {
+    let input = Array("\u{1B}[?1006l\u{1B}[?1006h".utf8)
+    let whole = mouseModes(await drainedEmulator().feed(input))
+    #expect(whole == [.disabled, .sgr])
+    for split in 1..<input.count {
+      let emulator = await drainedEmulator()
+      var events = await emulator.feed(Array(input[..<split]))
+      events += await emulator.feed(Array(input[split...]))
+      #expect(mouseModes(events) == whole, "split at byte \(split)")
+    }
+    let titled = await drainedEmulator().feed(Array("\u{1B}[?1006h\u{1B}]0;t\u{07}".utf8))
+    #expect(titled == [.mouseModeChanged(.sgr), .titleChanged("t")])
+    let combined = await drainedEmulator().feed(Array("\u{1B}[?1000;1006h".utf8))
+    #expect(mouseModes(combined) == [.button, .sgr])
+  }
+
+  @Test("mouse tracking and encoding neighbors keep their events")
+  func mouseTrackingNeighborsKeepTheirEvents() async {
+    func modes(_ text: String) async -> [TerminalMouseMode] {
+      mouseModes(await drainedEmulator().feed(Array(text.utf8)))
+    }
+    #expect(await modes("\u{1B}[?1000h\u{1B}[?1006h") == [.button, .sgr])
+    #expect(await modes("\u{1B}[?1003h") == [.anyEvent])
+    #expect(await modes("\u{1B}[?1000l") == [.disabled])
+    #expect(await modes("\u{1B}[?1016h") == [.sgr])
+    #expect(await modes("\u{1B}[?1016l") == [.disabled])
+    #expect(await modes("\u{1B}[?2004h\u{1B}[?25l").isEmpty)
+    #expect(await modes("\u{1B}[1006h").isEmpty)
+    #expect(await modes("?1006h").isEmpty)
+    let tracking = await drainedEmulator()
+    _ = await tracking.feed(Array("\u{1B}[?1000h\u{1B}[?1006l".utf8))
+    #expect(await tracking.captureSnapshot().mouseTracking)
+  }
+}
+
+private func firstCell(after prefix: String) async -> RasterCell {
+  let emulator = TerminalEmulator(size: CellSize(width: 5, height: 1))
+  _ = await emulator.feed(Array((prefix + "X").utf8))
+  return (await emulator.snapshot()).cells[0][0]
+}
+
+/// SwiftTerm announces its initial (disabled) mouse mode during construction;
+/// the first feed drains that notification. Start from a drained emulator.
+private func drainedEmulator() async -> TerminalEmulator {
+  let emulator = TerminalEmulator(size: CellSize(width: 10, height: 3))
+  _ = await emulator.feed([])
+  return emulator
+}
+
+private func mouseModes(_ events: [TerminalEmulatorEvent]) -> [TerminalMouseMode] {
+  events.compactMap { event -> TerminalMouseMode? in
+    guard case .mouseModeChanged(let mode) = event else { return nil }
+    return mode
+  }
 }
 
 private func captureStandardOutput(

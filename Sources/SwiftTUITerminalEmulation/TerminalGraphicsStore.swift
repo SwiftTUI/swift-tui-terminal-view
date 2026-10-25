@@ -28,6 +28,8 @@ struct TerminalGraphicsStore {
   static let maximumDimension = 1024
   static let maximumPixels = 1_048_576
   static let maximumRetainedBytes = 16 * 1024 * 1024
+  /// Pixel-dimensioned placements without `c`/`r` occupy whole cells of this size.
+  static let virtualCell = PixelSize(width: 8, height: 16)
 
   mutating func clear(alternate: Bool? = nil) {
     if let alternate {
@@ -191,8 +193,10 @@ struct TerminalGraphicsStore {
         alternate: alternate,
         row: row, column: column,
         size: CellSize(
-          width: columns > 0 ? columns : max(1, (asset.size.width + 7) / 8),
-          height: rows > 0 ? rows : max(1, (asset.size.height + 15) / 16))
+          width: columns > 0
+            ? columns : max(1, Self.cells(asset.size.width, Self.virtualCell.width)),
+          height: rows > 0
+            ? rows : max(1, Self.cells(asset.size.height, Self.virtualCell.height)))
       ))
     nextIdentity &+= 1
   }
@@ -215,6 +219,8 @@ struct TerminalGraphicsStore {
     let placement = UInt32(control["p"] ?? "")
     return Array("\u{1B}_Gi=\(id)\(placement.map { ",p=\($0)" } ?? "");\(message)\u{1B}\\".utf8)
   }
+
+  private static func cells(_ pixels: Int, _ cell: Int) -> Int { (pixels + cell - 1) / cell }
 
   static func validDimensions(_ width: Int, _ height: Int) -> Bool {
     (1...maximumDimension).contains(width) && (1...maximumDimension).contains(height)

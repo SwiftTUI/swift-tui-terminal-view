@@ -22,6 +22,32 @@ struct PaneGraphicsTests {
     #expect(await emulator.captureSnapshot().graphics.isEmpty)
   }
 
+  @Test("Sixel cell extent follows the reported cell size")
+  func sixelExtentFollowsReportedCell() async throws {
+    let query = await TerminalEmulator(size: .init(width: 10, height: 4)).feed(
+      Array("\u{1B}[16t".utf8))
+    let reply = try #require(
+      query.lazy.compactMap { event -> String? in
+        guard case .clientReply(let bytes) = event else { return nil }
+        return String(decoding: bytes, as: UTF8.self)
+      }.first)
+    // CSI 6 ; height ; width t
+    let fields = reply.dropFirst(2).dropLast().split(separator: ";").compactMap { Int($0) }
+    try #require(fields.count == 3 && fields[0] == 6)
+    let (height, width) = (fields[1], fields[2])
+    for (pixels, cells) in [
+      (PixelSize(width: 3 * width, height: 2 * height), CellSize(width: 3, height: 2)),
+      // A partial cell still occupies a whole cell.
+      (PixelSize(width: 3 * width + 1, height: 2 * height + 1), CellSize(width: 4, height: 3)),
+    ] {
+      let emulator = TerminalEmulator(size: .init(width: 10, height: 4))
+      _ = await emulator.feed(solidSixel(pixels))
+      let image = try #require(await emulator.captureSnapshot().graphics.first)
+      #expect(image.pixelSize == pixels)
+      #expect(image.bounds.size == cells, "\(pixels) with reply \(reply.debugDescription)")
+    }
+  }
+
   @Test("Kitty IDs, replies, replacement, chunk assembly and deletion stay within a session")
   func kittyIsolation() async throws {
     let first = TerminalEmulator(size: .init(width: 10, height: 4))
@@ -153,4 +179,14 @@ private final class GraphicSession: TerminalSession {
   func send(mouse: TerminalEmulatorMouse) async {}
   func resize(_ size: CellSize) async throws {}
   func events() -> AsyncStream<TerminalEmulatorEvent> { AsyncStream { $0.finish() } }
+}
+
+/// A solid Sixel of exactly `size`, written in six-pixel bands.
+private func solidSixel(_ size: PixelSize) -> [UInt8] {
+  var bands = Array(repeating: "#1!\(size.width)~", count: size.height / 6)
+  if size.height % 6 > 0 {
+    let bits = UInt8((1 << (size.height % 6)) - 1)
+    bands.append("#1!\(size.width)\(Character(Unicode.Scalar(63 + bits)))")
+  }
+  return Array("\u{1B}Pq#1;2;100;0;0\(bands.joined(separator: "-"))\u{1B}\\".utf8)
 }
