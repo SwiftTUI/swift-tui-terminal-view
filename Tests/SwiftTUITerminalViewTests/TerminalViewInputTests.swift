@@ -127,13 +127,19 @@ struct TerminalViewInputTests {
     defer { runLoop.stop() }
 
     // The sibling owns initial focus, so terminal input must remain dormant.
-    await runLoop.press(KeyPress(.arrowDown))
+    // Probe with a key that has no framework fallback: an unclaimed arrow
+    // moves focus directionally by region geometry, so its outcome depends
+    // on the row the sibling is centred on rather than on focus routing.
+    let siblingFocus = runLoop.focusTracker.currentFocusIdentity
+    await runLoop.press(KeyPress(.character("x")))
     await Task.yield()
+    #expect(runLoop.focusTracker.currentFocusIdentity == siblingFocus)
     #expect(routedKeyPresses.withLock { $0 }.isEmpty)
     #expect(session.sentKeys.isEmpty)
 
     runLoop.focusTracker.focusNext()
     await runLoop.settle()
+    #expect(runLoop.focusTracker.currentFocusIdentity != siblingFocus)
 
     await runLoop.press(KeyPress(.arrowDown))
     await session.sentKeySignal.wait {
@@ -147,8 +153,10 @@ struct TerminalViewInputTests {
 
     runLoop.focusTracker.focusPrevious()
     await runLoop.settle()
-    await runLoop.press(KeyPress(.arrowDown))
+    #expect(runLoop.focusTracker.currentFocusIdentity == siblingFocus)
+    await runLoop.press(KeyPress(.character("x")))
     await Task.yield()
+    #expect(runLoop.focusTracker.currentFocusIdentity == siblingFocus)
     #expect(routedKeyPresses.withLock { $0 } == [KeyPress(.arrowDown), KeyPress(.escape)])
     #expect(session.sentKeys == [TerminalEmulatorKey(code: .arrowDown)])
   }
@@ -316,7 +324,7 @@ private struct HostFocusedTerminalFixture: View {
   // Deliberately collides with TerminalView.updateGeneration's authored slot
   // ordinal. The host-focused boundary must keep these differently typed slots
   // on distinct identities.
-  @FocusState(line: 13, column: 3) private var focus: HostFocusedTerminalFixtureFocus?
+  @FocusState(line: 61, column: 3) private var focus: HostFocusedTerminalFixtureFocus?
 
   let session: RecordingTerminalSession
   let keyRouting: @MainActor @Sendable (KeyPress) -> TerminalViewKeyDisposition
