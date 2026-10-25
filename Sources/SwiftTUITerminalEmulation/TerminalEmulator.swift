@@ -212,6 +212,7 @@ public actor TerminalEmulator {
   }
 
   public func send(mouse: TerminalEmulatorMouse) -> [UInt8] {
+    let pixel = Self.pixelPosition(of: mouse.cell)
     switch mouse.kind {
     case .cancelled:
       // Terminal mouse protocols have no cancellation packet. In particular,
@@ -221,29 +222,33 @@ public actor TerminalEmulator {
       terminal.sendEvent(
         buttonFlags: buttonFlags(for: button, release: false, modifiers: mouse.modifiers),
         x: mouse.cell.x,
-        y: mouse.cell.y
+        y: mouse.cell.y,
+        pixelX: pixel.x,
+        pixelY: pixel.y
       )
     case .up(let button):
       terminal.sendEvent(
         buttonFlags: buttonFlags(for: button, release: true, modifiers: mouse.modifiers),
         x: mouse.cell.x,
-        y: mouse.cell.y
+        y: mouse.cell.y,
+        pixelX: pixel.x,
+        pixelY: pixel.y
       )
     case .dragged(let button):
       terminal.sendMotion(
         buttonFlags: buttonFlags(for: button, release: false, modifiers: mouse.modifiers),
         x: mouse.cell.x,
         y: mouse.cell.y,
-        pixelX: mouse.cell.x,
-        pixelY: mouse.cell.y
+        pixelX: pixel.x,
+        pixelY: pixel.y
       )
     case .moved:
       terminal.sendMotion(
         buttonFlags: buttonFlags(for: .primary, release: true, modifiers: mouse.modifiers),
         x: mouse.cell.x,
         y: mouse.cell.y,
-        pixelX: mouse.cell.x,
-        pixelY: mouse.cell.y
+        pixelX: pixel.x,
+        pixelY: pixel.y
       )
     case .scrolled(let deltaX, let deltaY):
       guard deltaX != 0 || deltaY != 0 else {
@@ -253,11 +258,25 @@ public actor TerminalEmulator {
       terminal.sendEvent(
         buttonFlags: buttonFlags(for: button, release: false, modifiers: mouse.modifiers),
         x: mouse.cell.x,
-        y: mouse.cell.y
+        y: mouse.cell.y,
+        pixelX: pixel.x,
+        pixelY: pixel.y
       )
     }
 
     return delegate.drainClientReplyBytes()
+  }
+
+  /// SGR-Pixels (1016) reports positions in pixels; the other encodings ignore them. An
+  /// event carries only its cell, so report that cell's top-left pixel in the virtual
+  /// cell behind pixel-size reports and graphics extents. Saturate instead of trapping.
+  private static func pixelPosition(of cell: CellPoint) -> (x: Int, y: Int) {
+    func scaled(_ value: Int, by size: Int) -> Int {
+      let (product, overflow) = value.multipliedReportingOverflow(by: size)
+      return overflow ? (value < 0 ? .min : .max) : product
+    }
+    let size = TerminalGraphicsStore.virtualCell
+    return (scaled(cell.x, by: size.width), scaled(cell.y, by: size.height))
   }
 
   private func buttonFlags(

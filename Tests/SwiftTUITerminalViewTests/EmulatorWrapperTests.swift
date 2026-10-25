@@ -177,6 +177,70 @@ struct EmulatorWrapperTests {
     #expect(area.contains(.clientReply(Array("\u{1B}[4;48;80t".utf8))))
   }
 
+  @Test("SGR-Pixels reports pixel positions in the virtual graphics cell")
+  func sgrPixelReportsUseTheVirtualCell() async {
+    let emulator = TerminalEmulator(size: CellSize(width: 10, height: 3))
+    let reply = await emulator.feed(Array("\u{1B}[16t\u{1B}[?1003h\u{1B}[?1016h".utf8))
+    #expect(reply.contains(.clientReply(Array("\u{1B}[6;16;8t".utf8))))
+    func packet(_ kind: TerminalEmulatorMouse.Kind, _ x: Int, _ y: Int) async -> String {
+      let bytes = await emulator.send(mouse: .init(kind: kind, cell: CellPoint(x: x, y: y)))
+      return String(decoding: bytes, as: UTF8.self)
+    }
+    #expect(await packet(.down(.primary), 4, 2) == "\u{1B}[<0;32;32M")
+    #expect(await packet(.up(.primary), 4, 2) == "\u{1B}[<0;32;32m")
+    #expect(await packet(.dragged(.primary), 5, 1) == "\u{1B}[<32;40;16M")
+    #expect(await packet(.moved, 4, 2) == "\u{1B}[<35;32;32M")
+    #expect(await packet(.scrolled(deltaX: 0, deltaY: 1), 4, 2) == "\u{1B}[<65;32;32M")
+    #expect(await packet(.cancelled, 4, 2).isEmpty)
+    // A child dividing by the reported 8x16 cell recovers the event's cell.
+    for (x, y) in [(0, 0), (9, 2), (3, 1)] {
+      let report = await packet(.down(.primary), x, y)
+      let fields = report.dropFirst(3).dropLast().split(separator: ";").compactMap { Int($0) }
+      #expect(fields == [0, x * 8, y * 16], "\(report.dropFirst())")
+      #expect(fields.count == 3 && fields[1] / 8 == x && fields[2] / 16 == y)
+    }
+  }
+
+  @Test("cell encodings ignore the pixel position")
+  func cellEncodingsIgnoreThePixelPosition() async {
+    func packet(
+      _ emulator: TerminalEmulator, _ kind: TerminalEmulatorMouse.Kind, _ x: Int, _ y: Int
+    ) async -> [UInt8] {
+      await emulator.send(mouse: .init(kind: kind, cell: CellPoint(x: x, y: y)))
+    }
+    let sgr = TerminalEmulator(size: CellSize(width: 10, height: 3))
+    _ = await sgr.feed(Array("\u{1B}[?1003h\u{1B}[?1006h".utf8))
+    #expect(await packet(sgr, .down(.primary), 4, 2) == Array("\u{1B}[<0;5;3M".utf8))
+    #expect(await packet(sgr, .up(.primary), 4, 2) == Array("\u{1B}[<0;5;3m".utf8))
+    #expect(await packet(sgr, .dragged(.primary), 5, 1) == Array("\u{1B}[<32;6;2M".utf8))
+    #expect(await packet(sgr, .moved, 4, 2) == Array("\u{1B}[<35;5;3M".utf8))
+    #expect(
+      await packet(sgr, .scrolled(deltaX: 0, deltaY: 1), 4, 2) == Array("\u{1B}[<65;5;3M".utf8))
+
+    let encodings: [(control: String, x: Int, packet: [UInt8])] = [
+      ("", 4, [27, 91, 77, 32, 37, 35]),
+      ("\u{1B}[?1015h", 4, Array("\u{1B}[32;5;3M".utf8)),
+      ("\u{1B}[?1005h", 100, [27, 91, 77, 32, 0xC2, 0x85, 35]),
+    ]
+    for encoding in encodings {
+      let emulator = TerminalEmulator(size: CellSize(width: 120, height: 3))
+      _ = await emulator.feed(Array(("\u{1B}[?1000h" + encoding.control).utf8))
+      #expect(
+        await packet(emulator, .down(.primary), encoding.x, 2) == encoding.packet,
+        "\(encoding.control.dropFirst())")
+    }
+
+    // Scaling to pixels must not add an overflow trap to any encoding.
+    let far = Int.max / 4
+    let extreme = TerminalEmulator(size: CellSize(width: 10, height: 3))
+    _ = await extreme.feed(Array("\u{1B}[?1006h".utf8))
+    #expect(
+      await packet(extreme, .down(.primary), far, 2) == Array("\u{1B}[<0;\(far + 1);3M".utf8))
+    _ = await extreme.feed(Array("\u{1B}[?1016h".utf8))
+    #expect(
+      await packet(extreme, .down(.primary), far, 2) == Array("\u{1B}[<0;\(Int.max);32M".utf8))
+  }
+
   @Test("mouse-mode events follow control order independently of chunking")
   func mouseModeEventsFollowControlOrder() async {
     let input = Array("\u{1B}[?1006l\u{1B}[?1006h".utf8)

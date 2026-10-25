@@ -178,7 +178,9 @@ backend's normal text reflow.
 Child mouse reporting suppresses automatic drag selection and wheel history.
 Control-Shift-S explicitly overrides it for local selection. `send(mouse:)`
 provides X10/1000/1002/SGR encoding for hosts that route child pointer input.
-`TerminalView` does not itself forward pointer events to the child. A pointer
+SGR-Pixels (1016) reports the top-left pixel of the event's cell in the 8×16
+virtual cell that pixel-size reports describe, counted from 0 at the pane's top
+left. `TerminalView` does not itself forward pointer events to the child. A pointer
 press can focus its pane; wheel history requires that pane already be focused.
 
 ## Semantic pane review
