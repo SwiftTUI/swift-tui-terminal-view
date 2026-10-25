@@ -73,7 +73,7 @@ struct EmulatorWrapperTests {
     }
     withKnownIssue(
       """
-      Unfiled (STUI-1258 audit): with no scrollback, SwiftTerm 1.20.0's narrowing reflow \
+      STUI-1260: with no scrollback, SwiftTerm 1.20.0's narrowing reflow \
       leaves yBase stale, so a later line feed in a scroll region prints "scroll: bottomRow \
       …" to the host's stdout and skips the scroll (Terminal.swift:6607-6611)
       """
