@@ -157,11 +157,12 @@ and before terminal encoding. Focused input reaches only its owning pane.
 Click and drag to select visible text. Control-Shift-S enters explicit keyboard
 selection, arrows extend it, Home/End move to row edges, Enter or Control-C copies,
 and Escape exits. The blue highlight and copied text use one frozen snapshot:
-continued output cannot change a selection mid-copy. Selection normalizes wide
-character boundaries, preserves graphemes, skips continuation cells, trims
-hard-line trailing blanks, and joins soft wraps. Styles and escape bytes are
-never copied. The host's clipboard action decides whether the copy succeeds;
-`.terminalCopyCompleted { accepted in ... }` optionally reports the result.
+continued output cannot change a selection mid-copy. Every selected cell is
+white on blue, whatever its attributes, reverse video included. Selection
+normalizes wide character boundaries, preserves graphemes, skips continuation
+cells, trims hard-line trailing blanks, and joins soft wraps. Styles and escape
+bytes are never copied. The host's clipboard action decides whether the copy
+succeeds; `.terminalCopyCompleted { accepted in ... }` optionally reports the result.
 The write occurs even without that callback.
 
 The normal buffer retains 2,000 scrollback lines by default; `scrollbackLimit`
@@ -193,19 +194,26 @@ state record, and the most recent value can misstate the current mode:
   `.x10`, 1000 and 1002 → `.button`, 1003 → `.anyEvent`. Resetting any tracking
   mode turns tracking off and publishes `.disabled`, as does a terminal reset
   (`ESC c`). The first feed after construction reports the initial `.disabled`.
-- Setting SGR (1006) or SGR-Pixels (1016) encoding publishes `.sgr`. Resetting
-  either publishes `.disabled`, although tracking continues.
-- UTF-8 (1005) and URXVT (1015) controls publish nothing. Selecting one after SGR
-  changes the encoding while the last value stays `.sgr`. Resetting any encoding
-  mode restores the default X10 encoding. A terminal reset keeps the encoding.
+- Encoding values report changes of the encoding the backend applies. A control
+  that makes the encoding SGR (1006) or SGR-Pixels (1016), including a switch
+  between the two, publishes `.sgr`. A control that changes it from either to
+  X10, UTF-8 (1005) or URXVT (1015) publishes `.disabled`, although tracking
+  continues. Resetting any encoding mode restores the default X10 encoding. A
+  terminal reset keeps the encoding.
+- Encoding controls that change nothing publish nothing: a repeat, a reset while
+  no SGR encoding is set, and changes among X10, UTF-8 and URXVT. Neither does a
+  sequence the backend drops, such as one with more than 24 parameters. Forms it
+  accepts publish: `:` separators, a DEL or C0 control among the parameters, and
+  a control restarted after an ESC.
 - A control sequence with several parameters publishes its tracking values
-  first, then its encoding values: `ESC[?1006;1000h` publishes `.button`, `.sgr`.
-  Separate sequences publish in byte order, independently of read boundaries.
+  first, then one encoding value for its net change: `ESC[?1006;1000h` publishes
+  `.button`, `.sgr`, and `ESC[?1006;1015h` publishes no encoding value. Separate
+  sequences publish in byte order, independently of read boundaries.
 
-The lossy transitions are therefore an encoding reset reported as `.disabled`,
-1000 and 1002 both reported as `.button`, 1016 reported like 1006, changes to
-1005 and 1015 not reported, and encoding values moved after tracking values
-within one sequence.
+The lossy transitions are therefore a change away from SGR reported as
+`.disabled`, 1000 and 1002 both reported as `.button`, 1016 reported like 1006,
+changes among X10, 1005 and 1015 not reported, and the encoding value moved after
+the tracking values within one sequence.
 
 To route pointer input, read whether the child is tracking from
 `TerminalSnapshot.mouseTracking`, which is exact at capture
@@ -291,9 +299,17 @@ the child: the host owns that lifecycle and calls `terminate()` when closing a
 process pane. Keeping a session for a hidden tab keeps its bounded image store.
 
 Control strings are incrementally framed across PTY reads, capped at 6 MiB and
-five seconds on subsequent input. CAN/SUB cancel a string. Truncated strings
-remain invisible and are discarded when cancelled, expired, oversized, or the
-session is disposed. These resource limits apply independently to each session.
+five seconds on subsequent input. CAN/SUB cancel a string, and an ESC that does
+not begin the string terminator discards it and starts a new control sequence.
+Truncated strings remain invisible and are discarded when cancelled, expired,
+oversized, or the session is disposed. These resource limits apply
+independently to each session. SOS and PM strings are discarded. Inside an
+escape or CSI sequence, a C0 control takes effect where it occurs, DEL is
+ignored and ESC starts a new sequence, as in the emulator's parser. An 8-bit C1
+control inside a sequence or a control string acts as its 7-bit form; OSC text
+after its first character keeps such bytes, since UTF-8 text contains them.
+Locator reporting (DECELR, `CSI Ps ; Pu ' z`) and SGR attributes the emulator
+does not support are ignored without output.
 
 ## Host-controlled notifications
 

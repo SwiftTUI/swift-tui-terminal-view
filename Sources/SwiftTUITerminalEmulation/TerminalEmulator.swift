@@ -12,17 +12,21 @@ public actor TerminalEmulator {
   private var framer = TerminalControlFramer()
   private var graphics = TerminalGraphicsStore()
   private var notifications = TerminalNotificationParser()
+  /// The probe report of the mouse encoding the backend applied after the last observation.
+  private var mouseEncodingReport: [UInt8]
 
   public init(size: CellSize, scrollbackLimit: Int = 2_000) {
     let delegate = EmulatorDelegate()
-    self.delegate = delegate
-    self.terminal = Terminal(
+    let terminal = Terminal(
       delegate: delegate,
       options: TerminalOptions(
         cols: size.width, rows: size.height, scrollback: max(0, min(100_000, scrollbackLimit)))
     )
-    self.terminal.silentLog = true
-    self.terminal.registerOscHandler(code: 133) { _ in }
+    terminal.silentLog = true
+    terminal.registerOscHandler(code: 133) { _ in }
+    self.delegate = delegate
+    self.terminal = terminal
+    self.mouseEncodingReport = Self.mouseEncodingReport(of: terminal, delegate: delegate)
   }
 
   public func feed(_ bytes: [UInt8]) -> [TerminalEmulatorEvent] {
@@ -30,8 +34,9 @@ public actor TerminalEmulator {
       let previousBuffer = ObjectIdentifier(terminal.buffer)
       switch chunk {
       case .terminal(let bytes):
+        guard let bytes = TerminalBackendSequenceFilter.filtered(bytes) else { break }
         terminal.feed(byteArray: bytes)
-        for event in Self.mouseEncodingEvents(in: bytes) { delegate.record(event) }
+        recordMouseEncodingChange(after: bytes)
       case .erase(let bytes):
         graphics.clear(alternate: terminal.isCurrentBufferAlternate)
         terminal.feed(byteArray: bytes)
@@ -42,6 +47,7 @@ public actor TerminalEmulator {
         for notification in notifications.reset() { delegate.record(.notification(notification)) }
         graphics.clear()
         terminal.feed(byteArray: [27, 99])
+        recordMouseEncodingChange()
       case .osc(let bytes):
         if bytes.starts(with: [57, 57, 59]) {
           if let notification = notifications.parse(bytes) {
@@ -315,21 +321,49 @@ public actor TerminalEmulator {
     return .wheelDown
   }
 
-  /// The backend notifies tracking changes but not its SGR encoding. The framer delivers
-  /// each complete control sequence as one chunk, so derive encoding changes from a
-  /// DECSET/DECRST sequence, in parameter order, after the backend's notifications for
-  /// that sequence. Transport chunk boundaries cannot change what is published.
-  private static func mouseEncodingEvents(in sequence: [UInt8]) -> [TerminalEmulatorEvent] {
-    guard sequence.count >= 5, sequence[0] == 27, sequence[1] == 91, sequence[2] == 63,
-      let final = sequence.last, final == 104 || final == 108
-    else { return [] }
-    let parameters = sequence[3..<(sequence.count - 1)]
-    guard parameters.allSatisfy({ (48...57).contains($0) || $0 == 59 }) else { return [] }
-    return parameters.split(separator: 59).compactMap { parameter in
-      guard let mode = Int(String(decoding: parameter, as: UTF8.self)), mode == 1006 || mode == 1016
-      else { return nil }
-      return .mouseModeChanged(final == 104 ? .sgr : .disabled)
+  /// Publishes a change of the mouse encoding the backend applies after `sequence`.
+  ///
+  /// The backend notifies tracking changes but not its encoding, which only DECSET and
+  /// DECRST change, at the final `h` or `l` of a CSI. The framer delivers each sequence
+  /// as the backend dispatches it, so observing the encoding after such a sequence, and
+  /// after the backend's notifications for it, publishes what the backend applied in
+  /// input order, whatever the read boundaries.
+  private func recordMouseEncodingChange(after sequence: [UInt8]) {
+    guard sequence.count >= 3, sequence[0] == 27, sequence[1] == 91, let final = sequence.last,
+      final == 104 || final == 108
+    else { return }
+    recordMouseEncodingChange()
+  }
+
+  /// Publishes a change of the encoding the backend applies: `.sgr` when the encoding
+  /// becomes SGR or SGR-Pixels, `.disabled` when it changes from either to another one.
+  private func recordMouseEncodingChange() {
+    let report = Self.mouseEncodingReport(of: terminal, delegate: delegate)
+    guard report != mouseEncodingReport else { return }
+    let wasSGR = Self.isSGRReport(mouseEncodingReport)
+    mouseEncodingReport = report
+    if Self.isSGRReport(report) {
+      delegate.record(.mouseModeChanged(.sgr))
+    } else if wasSGR {
+      delegate.record(.mouseModeChanged(.disabled))
     }
+  }
+
+  /// The encoding is private to the backend, but each report it writes is shaped only by
+  /// that encoding. A press at cell (199, 0) and pixel (0, 0) tells all five apart: X10
+  /// `ESC[M` with one byte per coordinate, UTF-8 with two for this column, SGR
+  /// `ESC[<0;200;1M`, SGR-Pixels `ESC[<0;0;0M` and URXVT `ESC[32;200;1M`. The report is
+  /// captured, never published.
+  private static func mouseEncodingReport(
+    of terminal: Terminal, delegate: EmulatorDelegate
+  ) -> [UInt8] {
+    delegate.capturingClientReplies {
+      terminal.sendEvent(buttonFlags: 0, x: 199, y: 0, pixelX: 0, pixelY: 0)
+    }
+  }
+
+  private static func isSGRReport(_ report: [UInt8]) -> Bool {
+    report.starts(with: [27, 91, 60])
   }
 
   private static func rasterCell(
@@ -478,9 +512,19 @@ public actor TerminalEmulator {
 
 private final class EmulatorDelegate: TerminalDelegate {
   private var events: [TerminalEmulatorEvent] = []
+  private var capturedReplies: [UInt8]?
 
   func record(_ event: TerminalEmulatorEvent) {
     events.append(event)
+  }
+
+  /// Returns the replies the backend sends during `body` instead of publishing them.
+  func capturingClientReplies(_ body: () -> Void) -> [UInt8] {
+    capturedReplies = []
+    body()
+    let replies = capturedReplies ?? []
+    capturedReplies = nil
+    return replies
   }
 
   func drainEvents() -> [TerminalEmulatorEvent] {
@@ -531,6 +575,10 @@ private final class EmulatorDelegate: TerminalDelegate {
   }
 
   func send(source: Terminal, data: ArraySlice<UInt8>) {
+    if capturedReplies != nil {
+      capturedReplies?.append(contentsOf: data)
+      return
+    }
     // SwiftTerm owns the incremental parser and the per-buffer negotiation stacks.
     // Mask its query response to the information this host-facing key API supplies.
     let response = String(decoding: data, as: UTF8.self)

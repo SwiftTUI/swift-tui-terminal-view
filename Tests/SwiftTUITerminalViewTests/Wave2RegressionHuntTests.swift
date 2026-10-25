@@ -7,7 +7,8 @@ import Testing
 // Wave-2 regression hunt, part CA (STUI-1165): neighbours of the 0.19.3
 // cell-conversion, pixel-report, mouse-mode and SGR-Pixels repairs (STUI-1148,
 // 1149, 1151, 1153, 1179, 1215). Cases w2ca001-w2ca008; the hypotheses precede
-// these tests in the hunt's evidence directory.
+// these tests in the hunt's evidence directory. The w3ca1 cases are the
+// neighbours of the wave-3 repairs of NEW-1 (STUI-1253) and NEW-2 (STUI-1254).
 @Suite("Wave-2 hunt CA: TerminalView repair neighbours", .serialized)
 struct Wave2RegressionHuntTests {
   // MARK: Selection highlight over preserved reverse video (STUI-1149)
@@ -19,17 +20,8 @@ struct Wave2RegressionHuntTests {
     #expect(presentedForeground(plain) == .white)
     for prefix in ["\u{1B}[7m", "\u{1B}[31;7m", "\u{1B}[42;7m"] {
       let style = await highlightedStyle(after: prefix)
-      w2HuntKnown(
-        """
-        NEW-1: a selected default-colour reverse-video cell is presented blue on white, \
-        not with the blue highlight; highlightedGrid replaces both colours but keeps the \
-        .reverse emphasis STUI-1149 now preserves; contract: TerminalEmbedding.md:159; \
-        adjacent STUI-1149
-        """
-      ) {
-        #expect(presentedBackground(style) == .blue, "\(prefix.debugDescription)")
-        #expect(presentedForeground(style) == .white, "\(prefix.debugDescription)")
-      }
+      #expect(presentedBackground(style) == .blue, "\(prefix.debugDescription)")
+      #expect(presentedForeground(style) == .white, "\(prefix.debugDescription)")
     }
   }
 
@@ -43,6 +35,36 @@ struct Wave2RegressionHuntTests {
     #expect(presentedForeground(faint) == .white)
     #expect(faint?.emphasis.contains(.faint) == true)
     #expect(faint?.emphasis.contains(.blink) == true)
+  }
+
+  @Test("w3ca1 the selection highlight is white on blue over every cell attribute")
+  func w3ca1SelectionHighlightIsTheSameForEveryAttribute() async {
+    let prefixes = [
+      "", "\u{1B}[1m", "\u{1B}[2m", "\u{1B}[3m", "\u{1B}[4m", "\u{1B}[5m", "\u{1B}[7m",
+      "\u{1B}[9m", "\u{1B}[1;7m", "\u{1B}[4;7m", "\u{1B}[31;7m", "\u{1B}[42;7m",
+      "\u{1B}[31;42;7m", "\u{1B}[2;5;7m",
+    ]
+    for prefix in prefixes {
+      let style = await highlightedStyle(after: prefix)
+      #expect(presentedBackground(style) == .blue, "\(prefix.debugDescription)")
+      #expect(presentedForeground(style) == .white, "\(prefix.debugDescription)")
+      #expect(style?.emphasis.contains(.reverse) == false, "\(prefix.debugDescription)")
+    }
+    #expect(await highlightedStyle(after: "\u{1B}[1;7m")?.emphasis == .bold)
+    #expect(await highlightedStyle(after: "\u{1B}[4;7m")?.underlineStyle == TextLineStyle())
+  }
+
+  @Test("w3ca1 cells outside the selection keep reverse video")
+  func w3ca1CellsOutsideTheSelectionKeepReverseVideo() async {
+    let emulator = TerminalEmulator(size: CellSize(width: 10, height: 1))
+    _ = await emulator.feed(Array("\u{1B}[7mABC".utf8))
+    var selection = TerminalTextSelection(
+      snapshot: await emulator.captureSnapshot(), anchor: CellPoint(x: 0, y: 0))
+    selection.extend(to: CellPoint(x: 1, y: 0))
+    let outside = selection.highlightedGrid.cells[0][2]
+    #expect(outside.character == "C")
+    #expect(outside.style == ResolvedTextStyle(emphasis: .reverse))
+    #expect(selection.text == "AB")
   }
 
   // MARK: DECSET grammar versus the backend's parser (STUI-1179)
@@ -66,16 +88,7 @@ struct Wave2RegressionHuntTests {
       await dropped.feed(Array(("\u{1B}[?" + String(repeating: "25;", count: 24) + "1006h").utf8)))
     let packet = await dropped.send(mouse: press)
     #expect(packet == Array("\u{1B}[M %#".utf8))
-    w2HuntKnown(
-      """
-      NEW-2: a DECSET with more than 24 parameters publishes .mouseModeChanged(.sgr) \
-      although SwiftTerm drops the sequence and keeps X10 encoding; mouseEncodingEvents \
-      parses its own DECSET grammar instead of the sequence the backend dispatched; \
-      contract: 36b424d (STUI-1179), docs/ARCHITECTURE.md:9; adjacent STUI-1179, STUI-1214
-      """
-    ) {
-      #expect(droppedModes.isEmpty, "published \(droppedModes) while the press encodes X10")
-    }
+    #expect(droppedModes.isEmpty, "published \(droppedModes) while the press encodes X10")
   }
 
   @Test("w2ca004 a DECSET 1006 with a colon separator or DEL publishes the encoding it selects")
@@ -92,17 +105,101 @@ struct Wave2RegressionHuntTests {
       let packet = await emulator.send(mouse: press)
       // The backend's grammar decides the encoding: SGR packets follow.
       #expect(packet == Array("\u{1B}[<0;5;3M".utf8), "\(name)")
-      w2HuntKnown(
-        """
-        NEW-2: a DECSET 1006 with a ':' separator or DEL switches SwiftTerm to SGR encoding \
-        without .mouseModeChanged; mouseEncodingEvents accepts only digits and ';' while the \
-        backend parser treats ':' as a separator and ignores DEL; contract: 36b424d \
-        (STUI-1179); adjacent STUI-1179, STUI-1214
-        """
-      ) {
-        #expect(modes == [.sgr], "\(name): published \(modes) while the press encodes SGR")
+      #expect(modes == [.sgr], "\(name): published \(modes) while the press encodes SGR")
+    }
+  }
+
+  @Test("w3ca1 encoding events follow every form in which the backend applies a control")
+  func w3ca1EncodingEventsFollowEveryFormTheBackendApplies() async {
+    let cases: [(name: String, input: [UInt8], expected: [TerminalEmulatorEvent])] = [
+      ("C0 inside", Array("\u{1B}[?10\u{07}06h".utf8), [.bell, .mouseModeChanged(.sgr)]),
+      ("ESC restarts", Array("\u{1B}[?10\u{1B}[?1006h".utf8), [.mouseModeChanged(.sgr)]),
+      ("inside DCS", Array("\u{1B}P\u{1B}[?1006h\u{1B}\\".utf8), [.mouseModeChanged(.sgr)]),
+      (
+        "inside OSC", Array("\u{1B}]0;t\u{1B}\u{1B}[?1006h\u{07}".utf8),
+        [.mouseModeChanged(.sgr), .bell]
+      ),
+      (
+        "C1 introducer", [27, 0x9B] + Array("?1006h\u{07}".utf8), [.mouseModeChanged(.sgr), .bell]
+      ),
+    ]
+    for (name, input, expected) in cases {
+      let whole = await trackingHuntEmulator()
+      #expect(modeAndBellEvents(await whole.feed(input)) == expected, "\(name)")
+      #expect(await whole.send(mouse: huntPress) == Array("\u{1B}[<0;5;3M".utf8), "\(name)")
+      for split in 1..<input.count {
+        let emulator = await trackingHuntEmulator()
+        var events = await emulator.feed(Array(input[..<split]))
+        events += await emulator.feed(Array(input[split...]))
+        #expect(modeAndBellEvents(events) == expected, "\(name), split at byte \(split)")
       }
     }
+  }
+
+  @Test("w3ca1 control strings end at ST or BEL and yield to an escape that does not end them")
+  func w3ca1ControlStringsYieldToAnEscapeThatDoesNotEndThem() async {
+    func titles(_ text: String) async -> [String] {
+      (await drainedHuntEmulator().feed(Array(text.utf8))).compactMap { event in
+        guard case .titleChanged(let title) = event else { return nil }
+        return title
+      }
+    }
+    #expect(await titles("\u{1B}]0;a\u{1B}\\") == ["a"])
+    #expect(await titles("\u{1B}]0;b\u{07}") == ["b"])
+    #expect(await titles("\u{1B}]0;c\u{1B}\u{07}") == ["c"])
+    // UTF-8 text in a title may contain C1 bytes ("—" is E2 80 94, "Ü" is C3 9C).
+    #expect(await titles("\u{1B}]0;a\u{2014}\u{DC}\u{07}") == ["a\u{2014}\u{DC}"])
+    // An ESC that does not begin ST discards the string; it starts the next sequence.
+    for text in ["\u{1B}]0;d\u{1B}[31mX", "\u{1B}Pq\u{1B}[31mX"] {
+      let emulator = TerminalEmulator(size: CellSize(width: 4, height: 1))
+      let events = await emulator.feed(Array(text.utf8))
+      let cell = (await emulator.snapshot()).cells[0][0]
+      #expect(!events.contains { if case .titleChanged = $0 { true } else { false } })
+      #expect(
+        cell.character == "X" && cell.style?.foregroundColor == .red, "\(text.debugDescription)")
+    }
+    // An 8-bit introducer opens its sequence; an escape with an intermediate stays whole.
+    let c1 = TerminalEmulator(size: CellSize(width: 4, height: 1))
+    _ = await c1.feed([27, 0x9B, 51, 49, 109] + Array("X".utf8))
+    #expect((await c1.snapshot()).cells[0][0].style?.foregroundColor == .red)
+    let graphics = TerminalEmulator(size: CellSize(width: 4, height: 1))
+    _ = await graphics.feed(Array("\u{1B}(0q\u{1B}(Bq".utf8))
+    #expect((await graphics.snapshot()).cells[0].prefix(2).map(\.character) == ["\u{2500}", "q"])
+  }
+
+  @Test("w3ca1 encoding events report changes of the encoding the backend applies")
+  func w3ca1EncodingEventsReportChangesOfTheAppliedEncoding() async {
+    func modes(_ controls: [String]) async -> [[TerminalMouseMode]] {
+      let emulator = await trackingHuntEmulator()
+      var result: [[TerminalMouseMode]] = []
+      for control in controls {
+        result.append(huntMouseModes(await emulator.feed(Array(control.utf8))))
+      }
+      return result
+    }
+    #expect(await modes(["\u{1B}[?1006h\u{1B}[?1006h"]) == [[.sgr]])
+    #expect(await modes(["\u{1B}[?1006l", "\u{1B}[?1016l"]) == [[], []])
+    #expect(
+      await modes(["\u{1B}[?1006h", "\u{1B}[?1016h", "\u{1B}[?1006h"]) == [[.sgr], [.sgr], [.sgr]])
+    #expect(await modes(["\u{1B}[?1006h", "\u{1B}[?1015h"]) == [[.sgr], [.disabled]])
+    #expect(await modes(["\u{1B}[?1006h", "\u{1B}[?1005l"]) == [[.sgr], [.disabled]])
+    #expect(await modes(["\u{1B}[?1005h", "\u{1B}[?1015h", "\u{1B}[?1015l"]) == [[], [], []])
+    // One sequence publishes its net change.
+    let pixels = await trackingHuntEmulator()
+    #expect(huntMouseModes(await pixels.feed(Array("\u{1B}[?1006;1016h".utf8))) == [.sgr])
+    #expect(await pixels.send(mouse: huntPress) == Array("\u{1B}[<0;32;32M".utf8))
+    let urxvt = await trackingHuntEmulator()
+    #expect(huntMouseModes(await urxvt.feed(Array("\u{1B}[?1006;1015h".utf8))).isEmpty)
+    #expect(await urxvt.send(mouse: huntPress) == Array("\u{1B}[32;5;3M".utf8))
+  }
+
+  @Test("w3ca1 encoding probes leave replies and terminal resets alone")
+  func w3ca1EncodingProbesLeaveRepliesAndResetsAlone() async {
+    let emulator = await drainedHuntEmulator()
+    let events = await emulator.feed(Array("\u{1B}[?1006h\u{1B}[5n".utf8))
+    #expect(events == [.mouseModeChanged(.sgr), .clientReply(Array("\u{1B}[0n".utf8))])
+    #expect(huntMouseModes(await emulator.feed(Array("\u{1B}c".utf8))) == [.disabled])
+    #expect(await emulator.send(mouse: huntPress) == Array("\u{1B}[<0;5;3M".utf8))
   }
 
   // MARK: Pixel reports (STUI-1153) and SGR-Pixels (STUI-1215)
@@ -166,15 +263,6 @@ struct Wave2RegressionHuntTests {
 
 // MARK: Helpers
 
-/// Preserves an unmarked reproduction while guarding only confirmed assertions.
-private func w2HuntKnown(_ comment: Comment, _ body: () -> Void) {
-  if ProcessInfo.processInfo.environment["SWIFTTUI_W2HUNT_UNMARKED"] == "1" {
-    body()
-  } else {
-    withKnownIssue(comment) { body() }
-  }
-}
-
 /// The highlighted style of cell (0,0) after `prefix + "AB"`, with (0,0)-(1,0) selected.
 private func highlightedStyle(after prefix: String) async -> ResolvedTextStyle? {
   let emulator = TerminalEmulator(size: CellSize(width: 10, height: 1))
@@ -199,6 +287,24 @@ private func drainedHuntEmulator() async -> TerminalEmulator {
   let emulator = TerminalEmulator(size: CellSize(width: 10, height: 3))
   _ = await emulator.feed([])
   return emulator
+}
+
+/// A drained emulator whose child has enabled normal tracking (1000).
+private func trackingHuntEmulator() async -> TerminalEmulator {
+  let emulator = await drainedHuntEmulator()
+  _ = await emulator.feed(Array("\u{1B}[?1000h".utf8))
+  return emulator
+}
+
+private let huntPress = TerminalEmulatorMouse(kind: .down(.primary), cell: CellPoint(x: 4, y: 2))
+
+private func modeAndBellEvents(_ events: [TerminalEmulatorEvent]) -> [TerminalEmulatorEvent] {
+  events.filter { event in
+    switch event {
+    case .mouseModeChanged, .bell: true
+    default: false
+    }
+  }
 }
 
 private func huntMouseModes(_ events: [TerminalEmulatorEvent]) -> [TerminalMouseMode] {

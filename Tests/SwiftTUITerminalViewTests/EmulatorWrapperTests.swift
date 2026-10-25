@@ -40,6 +40,79 @@ struct EmulatorWrapperTests {
     #expect(output == "")
   }
 
+  @Test("backend diagnostics for child sequences stay off the host's standard output")
+  func backendDiagnosticsStayOffHostStandardOutput() async throws {
+    // SwiftTerm prints these to the host process's stdout despite silentLog (STUI-1258).
+    let inputs: [[UInt8]] =
+      [
+        "\u{1B}[1;1'z", "\u{1B}['z", "\u{1B}[2;1'z", "\u{1B}[6m", "\u{1B}[53m", "\u{1B}[99999m",
+        "\u{1B}[1;6;31m", "\u{1B}[48;7;6m", "\u{1B}[6;m", "\u{1B}[6\u{1B}[6m", "\u{1B}[6\u{07}m",
+        "\u{1B}P\u{1B}[6m\u{1B}\\", "\u{1B}]0;a\u{1B}\u{1B}[6m\u{07}", "\u{1B}[1;1'z\u{1B}[6m",
+        "\u{1B}[:6m",
+      ].map { Array($0.utf8) } + [
+        [27, 91, 54, 0x7F, 109],
+        // 8-bit C1 controls that the backend interprets inside a sequence or string.
+        [27, 0x9B, 54, 109], [27, 91, 0x9B, 54, 109], [27, 32, 0x9B, 54, 109],
+        [27, 93, 0x9B, 54, 109, 7], [27, 80, 0x9B, 54, 109, 27, 92],
+        [27, 88, 0x9B, 54, 109, 27, 92], [27, 0x9B, 49, 39, 122],
+      ]
+    for input in inputs {
+      let emulator = TerminalEmulator(size: CellSize(width: 10, height: 2))
+      let output = try await captureStandardOutput { _ = await emulator.feed(input) }
+      #expect(output == "", "\(input)")
+    }
+  }
+
+  @Test("a narrowing resize without scrollback keeps scroll-region output off stdout")
+  func narrowingResizeWithoutScrollbackStaysQuiet() async throws {
+    let emulator = TerminalEmulator(size: CellSize(width: 18, height: 6), scrollbackLimit: 0)
+    let output = try await captureStandardOutput {
+      _ = await emulator.feed(Array((String(repeating: "x", count: 60) + "\n").utf8))
+      await emulator.resize(CellSize(width: 9, height: 6))
+      _ = await emulator.feed(Array("\u{1B}[3r\u{1B}[6;1H\n".utf8))
+    }
+    withKnownIssue(
+      """
+      Unfiled (STUI-1258 audit): with no scrollback, SwiftTerm 1.20.0's narrowing reflow \
+      leaves yBase stale, so a later line feed in a scroll region prints "scroll: bottomRow \
+      …" to the host's stdout and skips the scroll (Terminal.swift:6607-6611)
+      """
+    ) {
+      #expect(output == "")
+    }
+  }
+
+  @Test("filtered child sequences keep everything the backend applies")
+  func filteredSequencesKeepWhatTheBackendApplies() async {
+    let styles: [(String, ResolvedTextStyle?)] = [
+      ("\u{1B}[1;6;31m", ResolvedTextStyle(foregroundColor: .red, emphasis: .bold)),
+      ("\u{1B}[6m", nil),
+      ("\u{1B}[48;7;6m", nil),
+      ("\u{1B}[38;5;6m", ResolvedTextStyle(foregroundColor: .cyan)),
+      (
+        "\u{1B}[38:2::10:20:30m",
+        ResolvedTextStyle(foregroundColor: Color(red: 10 / 255, green: 20 / 255, blue: 30 / 255))
+      ),
+      ("\u{1B}[53;4:3m", ResolvedTextStyle(underlineStyle: TextLineStyle(pattern: .curly))),
+      ("\u{1B}[;1m", ResolvedTextStyle(emphasis: .bold)),
+      ("\u{1B}[1m\u{1B}[6;m", nil),
+      // 25 parameters: the backend drops the whole sequence.
+      ("\u{1B}[" + String(repeating: "1;", count: 24) + "6m", nil),
+    ]
+    for (prefix, expected) in styles {
+      #expect(await firstCell(after: prefix).style == expected, "\(prefix.debugDescription)")
+    }
+
+    let locator = TerminalEmulator(size: CellSize(width: 4, height: 1))
+    _ = await locator.feed(Array("\u{1B}[1;1'zAB".utf8))
+    #expect((await locator.snapshot()).cells[0].map(\.character) == ["A", "B", " ", " "])
+    let erase = TerminalEmulator(size: CellSize(width: 4, height: 1))
+    _ = await erase.feed(Array("AB\u{1B}[1;1;1;1$z".utf8))
+    #expect((await erase.snapshot()).cells[0].map(\.character) == [" ", "B", " ", " "])
+    let bell = TerminalEmulator(size: CellSize(width: 4, height: 1))
+    #expect(await bell.feed(Array("\u{1B}[6\u{07}mX".utf8)).contains(.bell))
+  }
+
   @Test("feeding plain ASCII produces visible cells")
   func feedAscii() async {
     let emulator = TerminalEmulator(size: CellSize(width: 10, height: 3))
@@ -243,11 +316,12 @@ struct EmulatorWrapperTests {
 
   @Test("mouse-mode events follow control order independently of chunking")
   func mouseModeEventsFollowControlOrder() async {
+    // Start from SGR so that the reset changes the encoding the backend applies.
     let input = Array("\u{1B}[?1006l\u{1B}[?1006h".utf8)
-    let whole = mouseModes(await drainedEmulator().feed(input))
+    let whole = mouseModes(await sgrEmulator().feed(input))
     #expect(whole == [.disabled, .sgr])
     for split in 1..<input.count {
-      let emulator = await drainedEmulator()
+      let emulator = await sgrEmulator()
       var events = await emulator.feed(Array(input[..<split]))
       events += await emulator.feed(Array(input[split...]))
       #expect(mouseModes(events) == whole, "split at byte \(split)")
@@ -267,7 +341,9 @@ struct EmulatorWrapperTests {
     #expect(await modes("\u{1B}[?1003h") == [.anyEvent])
     #expect(await modes("\u{1B}[?1000l") == [.disabled])
     #expect(await modes("\u{1B}[?1016h") == [.sgr])
-    #expect(await modes("\u{1B}[?1016l") == [.disabled])
+    let pixels = await drainedEmulator()
+    _ = await pixels.feed(Array("\u{1B}[?1016h".utf8))
+    #expect(mouseModes(await pixels.feed(Array("\u{1B}[?1016l".utf8))) == [.disabled])
     #expect(await modes("\u{1B}[?2004h\u{1B}[?25l").isEmpty)
     #expect(await modes("\u{1B}[1006h").isEmpty)
     #expect(await modes("?1006h").isEmpty)
@@ -288,7 +364,7 @@ struct EmulatorWrapperTests {
     #expect(await emulator.captureSnapshot().mouseTracking == false)
   }
 
-  @Test("encoding controls are independent of tracking and only 1006/1016 publish")
+  @Test("encoding controls are independent of tracking and only SGR changes publish")
   func encodingControlsAreIndependentOfTracking() async {
     let reverted = await drainedEmulator()
     let events = await reverted.feed(Array("\u{1B}[?1002h\u{1B}[?1006h\u{1B}[?1006l".utf8))
@@ -301,16 +377,20 @@ struct EmulatorWrapperTests {
     }
 
     let urxvt = await drainedEmulator()
-    #expect(mouseModes(await urxvt.feed(Array("\u{1B}[?1006h\u{1B}[?1015h".utf8))) == [.sgr])
+    #expect(
+      mouseModes(await urxvt.feed(Array("\u{1B}[?1006h\u{1B}[?1015h".utf8))) == [.sgr, .disabled])
     #expect(await urxvt.send(mouse: primaryPress) == Array("\u{1B}[32;5;3M".utf8))
 
     let utf8 = await drainedEmulator(width: 120)
-    #expect(mouseModes(await utf8.feed(Array("\u{1B}[?1006h\u{1B}[?1005h".utf8))) == [.sgr])
+    #expect(
+      mouseModes(await utf8.feed(Array("\u{1B}[?1006h\u{1B}[?1005h".utf8))) == [.sgr, .disabled])
     let wide = TerminalEmulatorMouse(kind: .down(.primary), cell: CellPoint(x: 100, y: 2))
     #expect(await utf8.send(mouse: wide) == [27, 91, 77, 32, 0xC2, 0x85, 35])
 
     let restored = await drainedEmulator()
-    #expect(mouseModes(await restored.feed(Array("\u{1B}[?1006h\u{1B}[?1015l".utf8))) == [.sgr])
+    #expect(
+      mouseModes(await restored.feed(Array("\u{1B}[?1006h\u{1B}[?1015l".utf8)))
+        == [.sgr, .disabled])
     #expect(await restored.send(mouse: primaryPress) == x10PrimaryPress)
   }
 
@@ -393,6 +473,13 @@ private func firstCell(after prefix: String) async -> RasterCell {
 private func drainedEmulator(width: Int = 10) async -> TerminalEmulator {
   let emulator = TerminalEmulator(size: CellSize(width: width, height: 3))
   _ = await emulator.feed([])
+  return emulator
+}
+
+/// A drained emulator whose child has selected SGR mouse encoding.
+private func sgrEmulator() async -> TerminalEmulator {
+  let emulator = await drainedEmulator()
+  _ = await emulator.feed(Array("\u{1B}[?1006h".utf8))
   return emulator
 }
 

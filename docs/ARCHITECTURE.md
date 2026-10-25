@@ -17,7 +17,9 @@ Both targets consume public framework products, with no package-internal access.
 Events are ordered change notifications, not state records. `mouseModeChanged`
 combines independent tracking and encoding controls and is lossy, so hosts read
 tracking from `TerminalSnapshot.mouseTracking`; Terminal Embedding's Mouse
-reporting section lists what each value reports.
+reporting section lists what each value reports. SwiftTerm notifies tracking
+changes; the emulator observes the encoding SwiftTerm applies from the shape of
+a captured probe report, after each control that can change it.
 
 The umbrella re-exports Runtime, PTYPrimitives, and Emulation. Tests use the
 existing public testing support product for view input and lifecycle checks;
@@ -31,7 +33,13 @@ package remains buildable with its tagged framework dependency.
 
 The emulator also owns a bounded history viewport, framed control strings,
 validated Sixel decoding, Kitty direct-transfer image storage and OSC 99
-assemblies. SwiftTerm remains private. `TerminalGraphic` values enter ordinary
+assemblies. The framer follows SwiftTerm's parser inside control sequences and
+strings, including 8-bit C1 controls, so each complete sequence it delivers is
+one SwiftTerm dispatches and SwiftTerm is in its ground state between them.
+Before SwiftTerm parses a sequence, the emulator removes the controls SwiftTerm
+reports only by printing to the host process's standard output (DECELR and
+unsupported SGR attributes), since that output is usually the outer terminal.
+SwiftTerm remains private. `TerminalGraphic` values enter ordinary
 SwiftTUI `Image` composition above the pane text and are clipped by the pane.
 `TerminalTextSelection` freezes a frame and its wrap metadata for consistent
 highlighting and copying. Host clipboard and notification callbacks own policy;

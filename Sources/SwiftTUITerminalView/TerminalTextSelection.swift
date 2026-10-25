@@ -46,9 +46,12 @@ public struct TerminalTextSelection: Sendable, Equatable {
     for y in grid.cells.indices where y >= start.y && y <= end.y {
       for x in grid.cells[y].indices {
         guard (y != start.y || x >= start.x) && (y != end.y || x <= end.x) else { continue }
+        // Reverse video would exchange the highlight colours again, so the highlight
+        // replaces it; the other attributes keep their colour roles.
         var style = grid.cells[y][x].style ?? ResolvedTextStyle()
         style.backgroundColor = .blue
         style.foregroundColor = .white
+        style.emphasis.remove(.reverse)
         grid.cells[y][x].style = style
       }
     }
