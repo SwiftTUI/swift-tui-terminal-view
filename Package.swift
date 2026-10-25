@@ -23,7 +23,7 @@ let package = Package(
     .library(name: "SwiftTUITerminalView", targets: ["SwiftTUITerminalView"])
   ],
   dependencies: [
-    .package(url: "https://github.com/SwiftTUI/swift-tui.git", exact: "0.19.2"),
+    .package(url: "https://github.com/SwiftTUI/swift-tui.git", exact: "0.19.3"),
     .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.20.0"),
     .package(url: "https://github.com/swiftlang/swift-docc-plugin.git", from: "1.5.0"),
   ],
