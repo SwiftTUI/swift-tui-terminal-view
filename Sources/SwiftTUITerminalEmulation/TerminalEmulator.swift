@@ -12,7 +12,8 @@ public actor TerminalEmulator {
   private var framer = TerminalControlFramer()
   private var graphics = TerminalGraphicsStore()
   private var notifications = TerminalNotificationParser()
-  /// The probe report of the mouse encoding the backend applied after the last observation.
+  /// The probe report, after its CSI introducer, of the mouse encoding the backend applied
+  /// after the last observation.
   private var mouseEncodingReport: [UInt8]
 
   public init(size: CellSize, scrollbackLimit: Int = 2_000) {
@@ -350,20 +351,25 @@ public actor TerminalEmulator {
   }
 
   /// The encoding is private to the backend, but each report it writes is shaped only by
-  /// that encoding. A press at cell (199, 0) and pixel (0, 0) tells all five apart: X10
-  /// `ESC[M` with one byte per coordinate, UTF-8 with two for this column, SGR
-  /// `ESC[<0;200;1M`, SGR-Pixels `ESC[<0;0;0M` and URXVT `ESC[32;200;1M`. The report is
-  /// captured, never published.
+  /// that encoding after its CSI introducer, which is `ESC [`, or `0x9B` while the child
+  /// selects 8-bit replies (S8C1T or DECSCL). The probe returns what follows the
+  /// introducer, so a change of reply controls alone is not a change of encoding. A press
+  /// at cell (199, 0) and pixel (0, 0) tells all five apart: X10 `M` with one byte per
+  /// coordinate, UTF-8 with two for this column, SGR `<0;200;1M`, SGR-Pixels `<0;0;0M` and
+  /// URXVT `32;200;1M`. The report is captured, never published.
   private static func mouseEncodingReport(
     of terminal: Terminal, delegate: EmulatorDelegate
   ) -> [UInt8] {
-    delegate.capturingClientReplies {
+    let report = delegate.capturingClientReplies {
       terminal.sendEvent(buttonFlags: 0, x: 199, y: 0, pixelX: 0, pixelY: 0)
     }
+    if report.starts(with: [27, 91]) { return Array(report.dropFirst(2)) }
+    if report.first == 0x9B { return Array(report.dropFirst()) }
+    return report
   }
 
   private static func isSGRReport(_ report: [UInt8]) -> Bool {
-    report.starts(with: [27, 91, 60])
+    report.first == 60
   }
 
   private static func rasterCell(

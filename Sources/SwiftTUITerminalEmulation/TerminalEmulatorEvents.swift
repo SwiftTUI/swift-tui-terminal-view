@@ -19,8 +19,10 @@ public enum TerminalEmulatorEvent: Sendable, Equatable {
   /// and ``TerminalMouseMode/disabled`` when it changes from either to X10, UTF-8 (1005) or
   /// URXVT (1015), while tracking continues. Other encoding controls publish nothing: a
   /// repeat, a change among X10, UTF-8 and URXVT, or a sequence the backend does not
-  /// accept. Within one control sequence, tracking values precede the encoding value, which
-  /// reflects the sequence's net change: `ESC[?1006;1000h` publishes `.button`, then `.sgr`.
+  /// accept. Reply controls (S8C1T, S7C1T, DECSCL) change only the report introducer and
+  /// publish nothing. Within one control sequence, tracking values precede the encoding
+  /// value, which reflects the sequence's net change: `ESC[?1006;1000h` publishes
+  /// `.button`, then `.sgr`.
   ///
   /// Read whether the child is tracking from ``TerminalSnapshot/mouseTracking``. While it
   /// is, the most recent ``TerminalMouseMode/x10``, ``TerminalMouseMode/button`` or

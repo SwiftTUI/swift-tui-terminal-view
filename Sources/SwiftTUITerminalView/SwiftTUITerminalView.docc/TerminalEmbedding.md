@@ -204,7 +204,9 @@ state record, and the most recent value can misstate the current mode:
   no SGR encoding is set, and changes among X10, UTF-8 and URXVT. Neither does a
   sequence the backend drops, such as one with more than 24 parameters. Forms it
   accepts publish: `:` separators, a DEL or C0 control among the parameters, and
-  a control restarted after an ESC.
+  a control restarted after an ESC. Reply controls (S8C1T, S7C1T and DECSCL)
+  select 7-bit or 8-bit report introducers, not an encoding: they publish
+  nothing, and encoding controls publish the same values under either.
 - A control sequence with several parameters publishes its tracking values
   first, then one encoding value for its net change: `ESC[?1006;1000h` publishes
   `.button`, `.sgr`, and `ESC[?1006;1015h` publishes no encoding value. Separate

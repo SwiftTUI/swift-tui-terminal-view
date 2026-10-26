@@ -19,7 +19,8 @@ combines independent tracking and encoding controls and is lossy, so hosts read
 tracking from `TerminalSnapshot.mouseTracking`; Terminal Embedding's Mouse
 reporting section lists what each value reports. SwiftTerm notifies tracking
 changes; the emulator observes the encoding SwiftTerm applies from the shape of
-a captured probe report, after each control that can change it.
+a captured probe report, after each control that can change it. It ignores the
+report's CSI introducer, which only reply controls (S8C1T, DECSCL) change.
 
 The umbrella re-exports Runtime, PTYPrimitives, and Emulation. Tests use the
 existing public testing support product for view input and lifecycle checks;

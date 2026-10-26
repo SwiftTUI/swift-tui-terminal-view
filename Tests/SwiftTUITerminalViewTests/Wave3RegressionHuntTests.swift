@@ -7,11 +7,12 @@ import Testing
 // Wave-3 regression hunt, part CA (STUI-1167): neighbours of the 0.19.4
 // TerminalView repairs (STUI-1214 documentation, STUI-1253 highlight, STUI-1254
 // encoding probe and framer, STUI-1258 backend filter). Cases w3ca001-w3ca012;
-// the hypotheses precede these tests in the hunt's evidence directory. Stdout is
+// the hypotheses precede these tests in the hunt's evidence directory. The wave-4
+// repair of STUI-1287 promoted w3ca001-w3ca004 and added w4tv01-w4tv02. Stdout is
 // process-wide, so the suite is serialized and recorded runs use --no-parallel.
 @Suite("Wave-3 hunt CA: TerminalView repair neighbours", .serialized)
 struct Wave3RegressionHuntTests {
-  // MARK: Encoding probe under 8-bit reply controls (STUI-1254)
+  // MARK: Encoding probe under 8-bit reply controls (STUI-1254, STUI-1287)
 
   @Test("w3ca001 under 8-bit controls DECSET 1006 still publishes the SGR encoding")
   func w3ca001EightBitControlsStillPublishTheSGREncoding() async {
@@ -19,13 +20,9 @@ struct Wave3RegressionHuntTests {
     #expect(w3Modes(await emulator.feed(w3Bytes("\u{1B} G"))).isEmpty)
     let modes = w3Modes(await emulator.feed(w3Bytes("\u{1B}[?1006h")))
     let packet = await emulator.send(mouse: w3Press)
-    // The press is SGR, introduced by the 8-bit CSI the child selected.
+    // The press is SGR, introduced by the 8-bit CSI the child selected (STUI-1287).
     #expect(packet == [0x9B] + w3Bytes("<0;5;3M"))
-    w3HuntKnown(
-      "NEW-1: under S8C1T, ?1006h publishes [] while presses encode SGR; isSGRReport tests only ESC [ < and the probe report starts with 0x9B; contract: TerminalEmbedding.md:197-202; adjacent STUI-1254"
-    ) {
-      #expect(modes == [.sgr], "published \(modes) while the press encodes SGR")
-    }
+    #expect(modes == [.sgr], "published \(modes) while the press encodes SGR")
   }
 
   @Test("w3ca002 entering 8-bit controls with SGR set publishes no encoding change")
@@ -35,11 +32,8 @@ struct Wave3RegressionHuntTests {
     #expect(w3Modes(await emulator.feed(w3Bytes("\u{1B} G"))).isEmpty)
     let modes = w3Modes(await emulator.feed(w3Bytes("\u{1B}[?25l")))
     #expect(await emulator.send(mouse: w3Press) == [0x9B] + w3Bytes("<0;5;3M"))
-    w3HuntKnown(
-      "NEW-1: after S8C1T, the unrelated ?25l publishes [.disabled] while the encoding stays SGR; the stored 7-bit report differs from the 0x9B report; contract: TerminalEmbedding.md:197-205; adjacent STUI-1254"
-    ) {
-      #expect(modes.isEmpty, "published \(modes) for a cursor control")
-    }
+    // A change of the report introducer alone is no encoding change (STUI-1287).
+    #expect(modes.isEmpty, "published \(modes) for a cursor control")
   }
 
   @Test("w3ca003 leaving 8-bit controls publishes no encoding change")
@@ -54,12 +48,9 @@ struct Wave3RegressionHuntTests {
     let cursorModes = w3Modes(await sevenBit.feed(w3Bytes("\u{1B}[?25h")))
     #expect(await sevenBit.send(mouse: w3Press) == w3Bytes("\u{1B}[<0;5;3M"))
     #expect(s7c1tModes.isEmpty)
-    w3HuntKnown(
-      "NEW-1: returning to 7-bit replies publishes .sgr (RIS [.disabled, .sgr]; ?25h after S7C1T [.sgr]) although the encoding stayed SGR; contract: TerminalEmbedding.md:200-205; adjacent STUI-1254"
-    ) {
-      #expect(resetModes == [.disabled], "RIS published \(resetModes)")
-      #expect(cursorModes.isEmpty, "?25h after S7C1T published \(cursorModes)")
-    }
+    // The encoding stayed SGR throughout, so neither publishes .sgr (STUI-1287).
+    #expect(resetModes == [.disabled], "RIS published \(resetModes)")
+    #expect(cursorModes.isEmpty, "?25h after S7C1T published \(cursorModes)")
   }
 
   @Test("w3ca004 DECSCL with 8-bit controls still publishes the SGR encoding")
@@ -68,11 +59,7 @@ struct Wave3RegressionHuntTests {
     #expect(w3Modes(await emulator.feed(w3Bytes("\u{1B}[62;0\"p"))).isEmpty)
     let modes = w3Modes(await emulator.feed(w3Bytes("\u{1B}[?1006h")))
     #expect(await emulator.send(mouse: w3Press) == [0x9B] + w3Bytes("<0;5;3M"))
-    w3HuntKnown(
-      "NEW-1: after DECSCL 62;0 (8-bit controls), ?1006h publishes [] while presses encode SGR; same probe-introducer mechanism; contract: TerminalEmbedding.md:197-202; adjacent STUI-1254"
-    ) {
-      #expect(modes == [.sgr], "published \(modes) while the press encodes SGR")
-    }
+    #expect(modes == [.sgr], "published \(modes) while the press encodes SGR")
   }
 
   @Test("w3ca005 encoding probes stay off the reply stream under 8-bit controls")
@@ -84,6 +71,83 @@ struct Wave3RegressionHuntTests {
       return bytes
     }
     #expect(replies == [[0x9B] + w3Bytes("0n")])
+  }
+
+  // MARK: Reply controls against 7-bit runs (wave 4, STUI-1287)
+
+  @Test("w4tv01 encoding events under 8-bit replies match the 7-bit run at every step")
+  func w4tv01EncodingEventsUnderEightBitRepliesMatchSevenBitRuns() async {
+    let steps: [(control: [UInt8], modes: [TerminalMouseMode])] = [
+      (w3Bytes("\u{1B}[?1006h"), [.sgr]),
+      (w3Bytes("\u{1B}[?1006h"), []),
+      (w3Bytes("\u{1B}[?1016h"), [.sgr]),
+      ([27, 0x9B] + w3Bytes("?1006h"), [.sgr]),
+      (w3Bytes("\u{1B}[?25l"), []),
+      (w3Bytes("\u{1B}[?1015h"), [.disabled]),
+      (w3Bytes("\u{1B}[?1006h"), [.sgr]),
+      (w3Bytes("\u{1B}[?1006l"), [.disabled]),
+      (w3Bytes("\u{1B}[?1005h"), []),
+      (w3Bytes("\u{1B}[?1006;1000h"), [.button, .sgr]),
+      (w3Bytes("\u{1B}c"), [.disabled]),
+      (w3Bytes("\u{1B}[?25h"), []),
+    ]
+    let resetStep = 10
+    func run(_ prefix: [UInt8]) async -> (modes: [[TerminalMouseMode]], presses: [[UInt8]]) {
+      let emulator = await w3TrackingEmulator()
+      #expect(w3Modes(await emulator.feed(prefix)).isEmpty, "\(prefix)")
+      var modes: [[TerminalMouseMode]] = []
+      var presses: [[UInt8]] = []
+      for step in steps {
+        modes.append(w3Modes(await emulator.feed(step.control)))
+        presses.append(await emulator.send(mouse: w3Press))
+      }
+      return (modes, presses)
+    }
+    let sevenBit = await run([])
+    #expect(sevenBit.modes == steps.map(\.modes))
+    #expect(sevenBit.presses.allSatisfy { $0.starts(with: [27, 91]) })
+    let prefixes: [(name: String, bytes: [UInt8])] = [
+      ("S8C1T", w3Bytes("\u{1B} G")), ("DECSCL 62;0", w3Bytes("\u{1B}[62;0\"p")),
+      ("DECSCL 63;2", w3Bytes("\u{1B}[63;2\"p")), ("DECSCL 65;0", w3Bytes("\u{1B}[65;0\"p")),
+    ]
+    for (name, prefix) in prefixes {
+      let eightBit = await run(prefix)
+      #expect(eightBit.modes == sevenBit.modes, "\(name) published \(eightBit.modes)")
+      for index in steps.indices {
+        // RIS restores 7-bit replies; until then only the introducer differs.
+        let expected =
+          index < resetStep
+          ? [0x9B] + sevenBit.presses[index].dropFirst(2) : sevenBit.presses[index]
+        #expect(eightBit.presses[index] == expected, "\(name), step \(index)")
+      }
+    }
+  }
+
+  @Test("w4tv02 reply controls publish no encoding change for any encoding")
+  func w4tv02ReplyControlsPublishNoEncodingChange() async {
+    let steps: [(control: String, eightBit: Bool)] = [
+      ("\u{1B} G", true), ("\u{1B}[?25l", true), ("\u{1B} F", false), ("\u{1B}[?25h", false),
+      ("\u{1B}[62;0\"p", true), ("\u{1B}[?25l", true), ("\u{1B}[61\"p", false),
+      ("\u{1B}[?25h", false), ("\u{1B}[63;2\"p", true), ("\u{1B}[?25l", true),
+      ("\u{1B}[62;1\"p", false), ("\u{1B}[?25h", false), ("\u{1B} G", true),
+      ("\u{1B}[?25l", true), ("\u{1B}c", false), ("\u{1B}[?25h", false),
+    ]
+    for encoding in ["", "\u{1B}[?1005h", "\u{1B}[?1006h", "\u{1B}[?1016h", "\u{1B}[?1015h"] {
+      let reference = await w3TrackingEmulator()
+      _ = await reference.feed(w3Bytes(encoding))
+      let packet = await reference.send(mouse: w3Press)
+      #expect(packet.starts(with: [27, 91]), "\(encoding.debugDescription)")
+      let body = packet.dropFirst(2)
+      let emulator = await w3TrackingEmulator()
+      _ = await emulator.feed(w3Bytes(encoding))
+      for (control, eightBit) in steps {
+        let modes = w3Modes(await emulator.feed(w3Bytes(control)))
+        let name = "\(encoding.debugDescription), \(control.debugDescription)"
+        #expect(modes == (control == "\u{1B}c" ? [.disabled] : []), "\(name) published \(modes)")
+        let introducer: [UInt8] = eightBit ? [0x9B] : [27, 91]
+        #expect(await emulator.send(mouse: w3Press) == introducer + body, "\(name)")
+      }
+    }
   }
 
   // MARK: Framer alignment (STUI-1254, STUI-1258)
@@ -217,15 +281,6 @@ struct Wave3RegressionHuntTests {
 }
 
 // MARK: Helpers
-
-/// Preserve an unmarked reproduction while guarding only confirmed assertions.
-private func w3HuntKnown(_ comment: Comment, _ body: () -> Void) {
-  if ProcessInfo.processInfo.environment["SWIFTTUI_W3HUNT_UNMARKED"] == "1" {
-    body()
-  } else {
-    withKnownIssue(comment) { body() }
-  }
-}
 
 private let w3Press = TerminalEmulatorMouse(kind: .down(.primary), cell: CellPoint(x: 4, y: 2))
 
