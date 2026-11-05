@@ -1,5 +1,6 @@
 import Foundation
 import SwiftTUIRuntime
+@_spi(Testing) import SwiftTUITestSupport
 import Testing
 
 @testable import SwiftTUITerminalView
@@ -141,7 +142,7 @@ struct PaneGraphicsTests {
     let emulator = TerminalEmulator(size: .init(width: 4, height: 2))
     _ = await emulator.feed(kitty("a=T,f=32,s=1,v=1,i=7,C=1,c=20,r=10", "/////w=="))
     let frame = await emulator.captureSnapshot()
-    let rendered = DefaultRenderer().render(
+    let rendered = ContractTestRenderer().render(
       HStack(spacing: 0) {
         TerminalView(session: GraphicSession(frame: frame)).frame(width: 4, height: 2)
         TerminalView(session: GraphicSession(frame: frame)).frame(width: 4, height: 2)

@@ -39,9 +39,9 @@ struct TerminalAccessibilityTests {
   @MainActor
   @Test("default pane exposes bounded review without changing its native focus membership")
   func paneSemantics() throws {
-    let artifacts = DefaultRenderer().render(
+    let artifacts = ContractTestRenderer().render(
       TerminalView(session: AccessibilitySession()),
-      context: ResolveContext(identity: Identity(components: [.named("TerminalPane")])),
+      context: ContractTestContext(identity: Identity(components: [.named("TerminalPane")])),
       proposal: .init(width: 20, height: 4))
     let nodes = artifacts.semanticSnapshot.accessibilityNodes
     for name in [

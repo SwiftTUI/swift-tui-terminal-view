@@ -11,7 +11,7 @@ struct TerminalViewLayoutTests {
   @Test("TerminalView accepts the parent's full proposal")
   func acceptsProposal() {
     let session = StubTerminalSession(grid: ForeignGrid.empty)
-    let artifacts = DefaultRenderer().render(
+    let artifacts = ContractTestRenderer().render(
       TerminalView(session: session),
       proposal: ProposedSize(width: 40, height: 12)
     )
@@ -27,7 +27,7 @@ struct TerminalViewLayoutTests {
       cells: Array(repeating: row, count: 2)
     )
     let session = StubTerminalSession(grid: grid)
-    let artifacts = DefaultRenderer().render(
+    let artifacts = ContractTestRenderer().render(
       TerminalView(session: session),
       proposal: ProposedSize(width: 4, height: 2)
     )

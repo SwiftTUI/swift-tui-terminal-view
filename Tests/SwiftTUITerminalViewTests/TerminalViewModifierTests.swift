@@ -1,4 +1,5 @@
 import SwiftTUIRuntime
+@_spi(Testing) import SwiftTUITestSupport
 import Testing
 
 @testable import SwiftTUITerminalView
@@ -14,7 +15,7 @@ struct TerminalViewModifierTests {
 
     let recorder = Recorder()
 
-    _ = DefaultRenderer().render(
+    _ = ContractTestRenderer().render(
       EnvironmentReader(\.terminalEventHandlers) { handlers in
         handlers.titleChanged?("Preview")
         return Text("ok")
@@ -35,7 +36,7 @@ struct TerminalViewModifierTests {
 
     let recorder = Recorder()
 
-    _ = DefaultRenderer().render(
+    _ = ContractTestRenderer().render(
       EnvironmentReader(\.terminalEventHandlers) { handlers in
         handlers.workingDirectoryChanged?("file:///tmp")
         return Text("ok")

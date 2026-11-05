@@ -1,4 +1,5 @@
 import SwiftTUIRuntime
+@_spi(Testing) import SwiftTUITestSupport
 import Testing
 
 @testable import SwiftTUITerminalView
@@ -27,7 +28,7 @@ struct CampaignT1ReviewTests {
         firstRow: id == 98 ? 10 : 0, retainedRows: 0...13,
         buffer: id == 97 ? .alternate : .normal,
         caret: id == 98 ? .init(x: 3, y: 12) : nil)
-      let snapshot = DefaultRenderer().render(
+      let snapshot = ContractTestRenderer().render(
         TerminalView(session: T1FrameSession(frame: frame)),
         proposal: .init(width: 12, height: 4))
       let nodes = snapshot.semanticSnapshot.accessibilityNodes
@@ -43,7 +44,7 @@ struct CampaignT1ReviewTests {
     case 99:
       let first = T1FrameSession(frame: .init(generation: 1, grid: Self.grid("FIRST")))
       let second = T1FrameSession(frame: .init(generation: 1, grid: Self.grid("SECOND")))
-      let snapshot = DefaultRenderer().render(
+      let snapshot = ContractTestRenderer().render(
         HStack {
           TerminalView(session: first).frame(width: 12, height: 2)
           TerminalView(session: second).frame(width: 12, height: 2)
