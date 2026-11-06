@@ -1,6 +1,6 @@
 # SwiftTUI Terminal View
 
-[![SwiftTUI](https://img.shields.io/badge/status-0.20.1%20pre--release-DAA520)](https://github.com/SwiftTUI/swift-tui)
+[![SwiftTUI](https://img.shields.io/badge/status-0.21.0%20pre--release-DAA520)](https://github.com/SwiftTUI/swift-tui)
 
 Embed terminal programs inside SwiftTUI views. `SwiftTUITerminalView` provides
 `TerminalView`, `TerminalProcessSession`, the `TerminalSession` protocol, and
@@ -10,8 +10,8 @@ WASI are not supported.
 ## Install
 
 ```swift
-.package(url: "https://github.com/SwiftTUI/swift-tui.git", exact: "0.20.1"),
-.package(url: "https://github.com/SwiftTUI/swift-tui-terminal-view.git", exact: "0.20.1"),
+.package(url: "https://github.com/SwiftTUI/swift-tui.git", .upToNextMinor(from: "0.21.0")),
+.package(url: "https://github.com/SwiftTUI/swift-tui-terminal-view.git", .upToNextMinor(from: "0.21.0")),
 ```
 
 Add `.product(name: "SwiftTUITerminalView", package: "swift-tui-terminal-view")`
@@ -60,3 +60,8 @@ suite and verify the public API baseline. See [docs](docs/README.md) for the
 module boundary and development commands. SwiftTUI organization integration
 uses a temporary dependency overlay; public manifests always use tagged HTTPS
 package dependencies.
+
+## Version compatibility
+
+See the [compatibility policy](docs/COMPATIBILITY.md) for supported minor lines,
+independent dependency adoption, and experimental interfaces.

@@ -8,7 +8,7 @@ after code changes; update `docs/.public-api-baseline.txt` with
 `SwiftTUITerminalView` composes the public `SwiftTUIRuntime` view surface and
 consumes `SwiftTUIPTYPrimitives`. `SwiftTUITerminalEmulation` is the only target
 that imports SwiftTerm. Do not use package-internal framework APIs or add an SPI
-for this package. Public manifests use exact tagged HTTPS sibling dependencies;
+for this package. Public manifests use tagged HTTPS sibling dependencies bounded to supported minor lines;
 localization belongs to the coordination overlay.
 
 Keep two-space indentation and the checked-in Swift formatting and strict
