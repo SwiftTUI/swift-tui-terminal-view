@@ -44,6 +44,8 @@ struct TerminalAccessibilityTests {
       context: ContractTestContext(identity: Identity(components: [.named("TerminalPane")])),
       proposal: .init(width: 20, height: 4))
     let nodes = artifacts.semanticSnapshot.accessibilityNodes
+    #expect(nodes.filter { $0.label == "Terminal" && $0.role == .heading(level: 1) }.count == 1)
+    #expect(nodes.filter { $0.role == .heading(level: 1) }.count == 1)
     for name in [
       "Terminal pane", "Terminal", "Copy reviewed output", "Freeze output review",
       "Earlier output", "Later output", "Follow latest output", "Enter child line input",

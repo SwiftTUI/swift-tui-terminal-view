@@ -27,7 +27,7 @@ struct TerminalPaneReview<Session: TerminalSession>: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       reading(TerminalReviewText.sanitized(title, limit: 256))
-        .accessibilityAddTraits(.isHeader)
+        .accessibilityRole(.heading(level: 1))
         .accessibilityFocused($reviewFocus, equals: "title")
       reading(
         "Rows \(reviewed.firstRow + 1) through \(reviewed.firstRow + reviewed.grid.size.height); \(reviewed.buffer == .alternate ? "alternate screen" : "normal screen")"
