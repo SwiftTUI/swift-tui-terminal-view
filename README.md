@@ -1,6 +1,6 @@
 # SwiftTUI Terminal View
 
-[![SwiftTUI](https://img.shields.io/badge/status-0.21.0%20pre--release-DAA520)](https://github.com/SwiftTUI/swift-tui)
+[![SwiftTUI](https://img.shields.io/badge/status-0.22.0%20pre--release-DAA520)](https://github.com/SwiftTUI/swift-tui)
 
 Embed terminal programs inside SwiftTUI views. `SwiftTUITerminalView` provides
 `TerminalView`, `TerminalProcessSession`, the `TerminalSession` protocol, and
@@ -11,7 +11,7 @@ WASI are not supported.
 
 ```swift
 .package(url: "https://github.com/SwiftTUI/swift-tui.git", .upToNextMajor(from: "0.21.0")),
-.package(url: "https://github.com/SwiftTUI/swift-tui-terminal-view.git", .upToNextMajor(from: "0.21.0")),
+.package(url: "https://github.com/SwiftTUI/swift-tui-terminal-view.git", .upToNextMajor(from: "0.22.0")),
 ```
 
 Add `.product(name: "SwiftTUITerminalView", package: "swift-tui-terminal-view")`
