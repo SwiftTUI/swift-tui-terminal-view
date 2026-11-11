@@ -10,8 +10,8 @@ WASI are not supported.
 ## Install
 
 ```swift
-.package(url: "https://github.com/SwiftTUI/swift-tui.git", .upToNextMinor(from: "0.21.0")),
-.package(url: "https://github.com/SwiftTUI/swift-tui-terminal-view.git", .upToNextMinor(from: "0.21.0")),
+.package(url: "https://github.com/SwiftTUI/swift-tui.git", .upToNextMajor(from: "0.21.0")),
+.package(url: "https://github.com/SwiftTUI/swift-tui-terminal-view.git", .upToNextMajor(from: "0.21.0")),
 ```
 
 Add `.product(name: "SwiftTUITerminalView", package: "swift-tui-terminal-view")`
@@ -63,5 +63,5 @@ package dependencies.
 
 ## Version compatibility
 
-See the [compatibility policy](docs/COMPATIBILITY.md) for supported minor lines,
+See the [compatibility policy](docs/COMPATIBILITY.md) for supported major lines,
 independent dependency adoption, and experimental interfaces.
